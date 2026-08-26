@@ -33,7 +33,7 @@ bash -n "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner"
 pass "all project and modified runtime scripts parse as Bash"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$ROOT"/bin/* "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root"
+  shellcheck "$ROOT"/bin/* "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root
   pass "project scripts pass shellcheck"
 fi
 
@@ -198,14 +198,16 @@ mapfile -t image_profiles < <(find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -typ
   fail "the current release must expose only the aarch64-virt image profile"
 pass "the current release exposes only the aarch64-virt image profile"
 
-grep -Fq 'ENABLE_UKI=no' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/limine-entry-tool.d/99-aarch64-virt.conf" ||
-  fail "AArch64 virt does not disable mkinitcpio's x86-64-only UKI mode"
-grep -Fq 'path: boot():/Image' "$OMARCHY_TEST_SOURCE/default/limine/limine.conf" ||
-  fail "Limine does not use Arch Linux ARM's stable kernel path"
-grep -Fq 'module_path: boot():/initramfs-linux.img' \
-  "$OMARCHY_TEST_SOURCE/default/limine/limine.conf" ||
-  fail "Limine does not use Arch Linux ARM's stable initramfs path"
+grep -Fxq 'ENABLE_UKI=yes' "$OMARCHY_TEST_SOURCE/etc/limine-entry-tool.d/omarchy-uki.conf" ||
+  fail "the AArch64 fork does not enable Omarchy's UKI boot path"
+if grep -Eq '^(ENABLE_UKI|FIND_BOOTLOADERS)=' \
+  "$OMARCHY_TEST_SOURCE/default/limine/default.conf"; then
+  fail "the AArch64 fork overrides Omarchy's UKI or bootloader-discovery defaults"
+fi
+if grep -Eq '^[[:space:]]*(protocol: linux|path: boot\(\):/Image|module_path:)' \
+  "$OMARCHY_TEST_SOURCE/default/limine/limine.conf"; then
+  fail "the AArch64 fork still carries a static kernel/initramfs boot entry"
+fi
 for package in limine-mkinitcpio-hook omarchy-spice-guest-tools; do
   grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
     fail "signed repository package is not selected: $package"
@@ -216,10 +218,12 @@ pass "aarch64-virt consumes its adapted Limine and SPICE packages from the signe
 
 grep -Fq 'plymouth-set-default-theme omarchy' "$ROOT/bin/build-image" ||
   fail "image assembly does not explicitly select the Omarchy boot theme"
-grep -Fq 'target_chroot mkinitcpio -P' "$ROOT/bin/build-image" ||
-  fail "native AArch64 image assembly does not explicitly rebuild initramfs"
-grep -Fq "grep -q '^==> ERROR:'" "$ROOT/bin/build-image" ||
-  fail "native AArch64 image assembly accepts mkinitcpio's false-success errors"
+grep -Fq 'LIMINE_FORCE_UEFI=yes limine-update' "$ROOT/bin/build-image" ||
+  fail "image assembly does not build the AArch64 UKI inside its offline chroot"
+grep -Fq 'boot/EFI/Linux/omarchy_linux.efi' "$ROOT/bin/build-image" ||
+  fail "image validation does not require the stable Omarchy UKI"
+grep -Fq "grep -Eq '^==> ERROR:|^ERROR:'" "$ROOT/bin/build-image" ||
+  fail "native AArch64 image assembly accepts UKI build errors"
 grep -Fq '== thunderbolt' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf" ||
   fail "aarch64-virt still requests the physical Thunderbolt kernel module"
@@ -230,6 +234,8 @@ grep -Fq 'usr/share/plymouth/themes/omarchy/omarchy.plymouth' "$ROOT/bin/build-i
   fail "image validation does not require the Omarchy Plymouth theme"
 grep -Fq 'usr/bin/plymouthd' "$ROOT/bin/build-image" ||
   fail "image validation does not inspect the initramfs for Plymouth"
+grep -Fq 'console=ttyAMA0,115200 plymouth.ignore-serial-consoles' "$ROOT/bin/build-image" ||
+  fail "the QEMU serial console suppresses the graphical Plymouth splash"
 grep -Fq 'multi-user.target.wants/limine-snapper-sync.service' "$ROOT/bin/build-image" ||
   fail "image validation does not require Limine snapshot synchronization"
 grep -Fq 'stop_target_background_helpers || true' "$ROOT/bin/build-image" ||
@@ -242,7 +248,17 @@ grep -Fq 'target_chroot pacman -Qqe' "$ROOT/bin/build-image" ||
   fail "successful images do not publish their exact explicit package inventory"
 grep -Fq 'target_chroot expac -Q' "$ROOT/bin/build-image" ||
   fail "successful images do not publish an auditable package manifest"
-pass "the complete Omarchy Limine and Plymouth boot experience is enforced"
+pass "the complete Omarchy UKI, primary Limine, and Plymouth boot experience is enforced"
+
+[[ ! -e $ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-setup-direct-boot.service ]] ||
+  fail "the VM profile still enables direct UKI boot automatically"
+[[ ! -e $ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-direct-boot ]] ||
+  fail "the VM profile still ships its own automatic direct-boot helper"
+! grep -Fq 'omarchy-aarch64-setup-direct-boot' "$ROOT/bin/build-image" ||
+  fail "image assembly still registers direct UKI boot automatically"
+grep -Fq 'gum confirm "Setup direct boot' "$OMARCHY_TEST_SOURCE/bin/omarchy-setup-direct-boot" ||
+  fail "the upstream user-selected Direct Boot command is unavailable"
+pass "Limine is the default path and direct UKI boot remains user-selected"
 
 grep -Eq '^\^linux-firmware\(\$\|-\)$' "$ROOT/profiles/aarch64-virt/remove-package-patterns" ||
   fail "aarch64-virt does not exclude linux-firmware and its split packages"

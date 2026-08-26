@@ -903,9 +903,9 @@ stage_first_boot_provisioning() {
 }
 
 configure_limine() {
-  local root_uuid cmdline initramfs_output mkinitcpio_status=0
+  local root_uuid cmdline boot_output boot_status=0
   root_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p2")
-  cmdline="root=UUID=$root_uuid rw rootflags=subvol=@ rootwait console=tty1 console=ttyAMA0,115200"
+  cmdline="root=UUID=$root_uuid rw rootflags=subvol=@ rootwait console=tty1 console=ttyAMA0,115200 plymouth.ignore-serial-consoles"
 
   install -d -m755 "$MOUNT_DIR/etc/default"
   install -m644 "$MOUNT_DIR/usr/share/omarchy/default/limine/default.conf" \
@@ -917,19 +917,19 @@ configure_limine() {
   assert_target_boot_hooks_restored
   log "Selecting the Omarchy Plymouth theme"
   target_chroot plymouth-set-default-theme omarchy
-  # Unlike Omarchy's x86_64 UKI path, the native AArch64 kernel-entry path
-  # does not make limine-update rebuild initramfs. Do it explicitly after all
-  # package, profile, and system-setup changes so Plymouth and the final
-  # mkinitcpio drop-ins are guaranteed to be embedded.
-  log "Building the final AArch64 initramfs"
-  initramfs_output=$(target_chroot mkinitcpio -P 2>&1) || mkinitcpio_status=$?
-  printf '%s\n' "$initramfs_output"
-  ((mkinitcpio_status == 0)) || fail "the final AArch64 initramfs build failed"
-  if grep -q '^==> ERROR:' <<<"$initramfs_output"; then
-    fail "the final AArch64 initramfs reported an error despite exiting successfully"
+  # The image is assembled in a chroot without the target firmware mounted.
+  # Force the UEFI capability check so limine-update follows the same UKI path
+  # as an installed Omarchy system. Its pacman hook keeps that UKI current when
+  # the kernel or initramfs inputs are upgraded later.
+  log "Building the Omarchy AArch64 UKI and Limine recovery stack"
+  boot_output=$(target_chroot env LIMINE_FORCE_UEFI=yes limine-update 2>&1) || boot_status=$?
+  printf '%s\n' "$boot_output"
+  ((boot_status == 0)) || fail "the final AArch64 UKI build failed"
+  if grep -Eq '^==> ERROR:|^ERROR:' <<<"$boot_output"; then
+    fail "the final AArch64 UKI build reported an error despite exiting successfully"
   fi
-  log "Building the complete Omarchy AArch64 Limine boot stack"
-  target_chroot env LIMINE_FORCE_UEFI=yes limine-update
+  [[ -f $MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi ]] ||
+    fail "limine-update did not generate the Omarchy AArch64 UKI"
   target_chroot btrfs quota disable / >/dev/null 2>&1 ||
     warn "could not disable Btrfs quotas after the final Limine build"
 }
@@ -1026,12 +1026,13 @@ validate_target() {
   )
   local -a required_paths=(
     boot/EFI/BOOT/BOOTAA64.EFI
+    boot/EFI/Linux/omarchy_linux.efi
     boot/EFI/limine/limine_aa64.efi
     boot/limine.conf
     etc/default/limine
     etc/fstab
-    etc/limine-entry-tool.d/99-aarch64-virt.conf
     etc/limine-entry-tool.d/omarchy-defaults.conf
+    etc/limine-entry-tool.d/omarchy-uki.conf
     etc/mkinitcpio.conf.d/omarchy_hooks.conf
     etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
     etc/omarchy-aarch64/excluded-packages
@@ -1067,23 +1068,22 @@ validate_target() {
   done
   [[ -f $MOUNT_DIR/boot/Image ]] ||
     fail "target validation failed: Arch Linux ARM kernel is missing"
-  [[ -f $MOUNT_DIR/boot/initramfs-linux.img ]] ||
-    fail "target validation failed: Arch Linux ARM initramfs is missing"
-  grep -q 'path: boot():/Image' "$MOUNT_DIR/boot/limine.conf" ||
-    fail "target validation failed: Limine does not reference the Arch Linux ARM kernel"
-  grep -q 'rootflags=subvol=@' "$MOUNT_DIR/boot/limine.conf" ||
-    fail "target validation failed: Limine entry lacks the Btrfs root subvolume"
-  if ! grep -Eq '(^|[[:space:]])quiet([[:space:]]|$)' "$MOUNT_DIR/boot/limine.conf" ||
-    ! grep -Eq '(^|[[:space:]])splash([[:space:]]|$)' "$MOUNT_DIR/boot/limine.conf"; then
-    fail "target validation failed: Limine entry does not enable the Omarchy boot splash"
-  fi
+  file "$MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi" |
+    grep -q 'PE32+ executable for EFI (application), ARM64' ||
+    fail "target validation failed: the Omarchy UKI is not an AArch64 EFI application"
+  grep -q 'protocol: efi' "$MOUNT_DIR/boot/limine.conf" ||
+    fail "target validation failed: Limine has no generated EFI/UKI entry"
+  grep -q 'EFI/Linux/omarchy_linux.efi' "$MOUNT_DIR/boot/limine.conf" ||
+    fail "target validation failed: Limine does not reference the Omarchy UKI"
   grep -q '^Theme=omarchy$' "$MOUNT_DIR/etc/plymouth/plymouthd.conf" ||
     fail "target validation failed: the Omarchy Plymouth theme is not selected"
+  grep -q 'plymouth\.ignore-serial-consoles' "$MOUNT_DIR/etc/default/limine" ||
+    fail "target validation failed: the serial console suppresses the graphical Plymouth splash"
   grep -q 'plymouth' "$MOUNT_DIR/etc/mkinitcpio.conf.d/omarchy_hooks.conf" ||
     fail "target validation failed: the Omarchy mkinitcpio hooks omit Plymouth"
   assert_target_boot_hooks_restored
-  initramfs_listing=$(target_chroot lsinitcpio /boot/initramfs-linux.img) ||
-    fail "target validation failed: cannot inspect the generated initramfs"
+  initramfs_listing=$(target_chroot lsinitcpio /boot/EFI/Linux/omarchy_linux.efi) ||
+    fail "target validation failed: cannot inspect the generated UKI"
   grep -Fq 'usr/bin/plymouthd' <<<"$initramfs_listing" ||
     fail "target validation failed: Plymouth is missing from the generated initramfs"
   grep -Fq 'usr/share/plymouth/themes/omarchy/omarchy.plymouth' <<<"$initramfs_listing" ||
@@ -1297,7 +1297,7 @@ main() {
   if [[ $IMAGE_FORMAT == raw && $OUTPUT_PATH == "$PROJECT_ROOT/$IMAGE_OUTPUT" && $OUTPUT_PATH == *.qcow2 ]]; then
     OUTPUT_PATH="${OUTPUT_PATH%.qcow2}.raw"
   fi
-  for command in awk blkid bsdtar btrfs chroot curl findmnt gpg gpgv jq losetup mkfs.btrfs \
+  for command in awk blkid bsdtar btrfs chroot curl file findmnt gpg gpgv jq losetup mkfs.btrfs \
     mkfs.fat mknod mount numfmt pacman parted readlink realpath sha256sum stat truncate udevadm umount git; do
     require_command "$command"
   done

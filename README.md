@@ -67,10 +67,17 @@ image build fails instead of combining mismatched source and packages.
 - Arch Linux ARM's generic AArch64 root filesystem and `linux-aarch64` kernel.
 - GPT with a 1 GiB EFI System Partition and a Btrfs root using `@`, `@home`,
   `@log`, and `@pkg` subvolumes.
-- Limine at the AArch64 UEFI fallback path `EFI/BOOT/BOOTAA64.EFI`, native
-  kernel/initramfs entries, Plymouth, Snapper, and a read-only `@factory`
-  snapshot. UKIs remain disabled because this target uses the traditional
-  AArch64 kernel and initramfs paths.
+- An AArch64 Omarchy UKI at `EFI/Linux/omarchy_linux.efi`, rebuilt by the
+  Limine mkinitcpio hook whenever the kernel changes. Limine is the normal boot
+  path through `EFI/BOOT/BOOTAA64.EFI`, with its vendor copy retained at
+  `EFI/limine/limine_aa64.efi`; it presents the branded Omarchy Bootloader menu
+  and loads the UKI. It also provides snapshot and recovery entries, with
+  Plymouth and a read-only `@factory` snapshot.
+- Direct UKI boot remains an explicit user choice through Omarchy's
+  `Setup > Direct Boot` command. The image does not register or prioritize a
+  direct firmware entry automatically because doing so bypasses Limine and its
+  snapshot menu. When reusing UEFI variable storage from an older test image,
+  disable its existing `Omarchy` direct-boot entry before testing this path.
 - VirtIO graphics, disk, network, RNG, QEMU guest-agent, SPICE clipboard and
   dynamic-display integration.
 - PipeWire audio with PulseAudio, ALSA, JACK, and GStreamer compatibility. The
