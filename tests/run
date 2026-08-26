@@ -43,20 +43,20 @@ fi
   fixture=$(mktemp -d)
   trap 'rm -rf "$fixture"' EXIT
 
-  printf '%s\n' keep from-source excluded old >"$fixture/base"
-  printf '%s\n' from-source >"$fixture/source"
+  printf '%s\n' keep from-repository excluded old >"$fixture/base"
+  printf '%s\n' from-repository >"$fixture/repository"
   printf '%s\n' excluded >"$fixture/excluded"
   printf '%s\n' 'old replacement' >"$fixture/replacements"
   printf '%s\n' runtime keep >"$fixture/runtime"
 
   mapfile -t resolved < <(
     resolve_official_packages \
-      "$fixture/base" "$fixture/source" "$fixture/excluded" \
+      "$fixture/base" "$fixture/repository" "$fixture/excluded" \
       "$fixture/replacements" "$fixture/runtime"
   )
   [[ ${resolved[*]} == "keep replacement runtime" ]] ||
     fail "package resolution produced: ${resolved[*]}"
-  pass "package resolution excludes source/unsupported targets and applies replacements"
+  pass "package resolution separates repository/unsupported targets and applies replacements"
 
   select_profile --profile aarch64-virt
   [[ $PROFILE_DIR == "$ROOT/profiles/aarch64-virt" ]] || fail "profile directory was not selected"
@@ -87,6 +87,14 @@ fi
     fail "boot hook was not restored byte-for-byte"
   assert_target_boot_hooks_restored
 
+  printf '[core]\nInclude = /etc/pacman.d/mirrorlist\n' >"$MOUNT_DIR/etc/pacman.conf"
+  write_omarchy_repository_configuration
+  grep -qxF 'Include = /etc/pacman.d/omarchy-aarch64.conf' \
+    "$MOUNT_DIR/etc/pacman.conf" || fail "signed repository include was not installed"
+  grep -qxF 'SigLevel = Required' "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "signed repository does not require signatures"
+  bash -n "$MOUNT_DIR/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository"
+
   for package in kdenlive libreoffice-fresh moonlight-qt hyprsunset gpu-screen-recorder; do
     grep -qx "$package" "$PROFILE_DIR/excluded-packages" ||
       fail "aarch64-virt still installs unsupported/oversized package: $package"
@@ -98,8 +106,8 @@ fi
     fi
   done
   for package in ufw-docker tobi-try; do
-    grep -qx "$package" "$ROOT/config/source-packages.aarch64" ||
-      fail "upstream default local package is not built: $package"
+    grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
+      fail "required Omarchy repository package is not selected: $package"
   done
   for package in gst-plugin-pipewire pipewire pipewire-alsa pipewire-audio pipewire-jack \
     pipewire-pulse wireplumber; do
@@ -145,33 +153,44 @@ fi
 )
 
 comm -12 \
-  <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ROOT/config/source-packages.aarch64" | sort) \
+  <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ROOT/config/omarchy-packages.aarch64" | sort) \
   <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ROOT/profiles/aarch64-virt/excluded-packages" | sort) |
-  grep -q . && fail "a package is both source-built and excluded"
-pass "AArch64 source and exclusion manifests are disjoint"
+  grep -q . && fail "a package is both repository-managed and excluded"
+pass "AArch64 repository and exclusion manifests are disjoint"
 
 (
-  # shellcheck source=../bin/build-packages
-  source "$ROOT/bin/build-packages"
-  validate_prebuilt_manifest
-  mapfile -t source_only < <(resolve_source_packages)
-  [[ " ${source_only[*]} " != *" localsend "* ]] ||
-    fail "checksum-pinned LocalSend would still be rebuilt"
-  [[ " ${source_only[*]} " == *" omarchy "* ]] ||
-    fail "fork-specific Omarchy package is not source-built"
-  [[ " ${source_only[*]} " == *" limine-mkinitcpio-hook "* ]] ||
-    fail "patched Limine hook is not source-built"
-  [[ " ${source_only[*]} " == *" omarchy-spice-guest-tools "* ]] ||
-    fail "Omarchy SPICE guest integration is not source-built"
-  OMARCHY_SOURCE_OVERRIDE=$OMARCHY_TEST_SOURCE
-  resolve_omarchy_source
-  [[ $OMARCHY_SOURCE_KIND == local ]] || fail "explicit source override was not selected"
-  [[ $OMARCHY_SOURCE_COMMIT == "$OMARCHY_AARCH64_REF" ]] ||
-    fail "test source is not the pinned Omarchy AArch64 commit"
-  package_version=$(omarchy_package_version)
-  [[ $package_version == 4.0.1.r*.g"${OMARCHY_AARCH64_REF:0:12}" ]] ||
-    fail "Omarchy package version does not use the 4.0.1 baseline: $package_version"
-  pass "prebuilt inputs and the separate Omarchy 4.0.1 source are pinned"
+  # shellcheck source=../bin/build-image
+  source "$ROOT/bin/build-image"
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  packages_json=$(
+    read_list "$ROOT/config/omarchy-packages.aarch64" |
+      jq -R --arg source "$OMARCHY_AARCH64_REF" '
+        {name: ., version: (if . == "omarchy" then
+          "4.0.1.r1.g" + ($source[0:12]) + "-1"
+        else "1-1" end)}
+      ' | jq --slurp .
+  )
+  jq -n \
+    --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" \
+    --argjson packages "$packages_json" '
+      {
+        schema: 1,
+        generated_at: "2026-08-26T00:00:00Z",
+        signing_fingerprint: $fingerprint,
+        state: {
+          schema: 1,
+          architecture: "aarch64",
+          channel: "stable",
+          packages: $packages
+        }
+      }
+    ' >"$fixture/repository-manifest.json"
+  OMARCHY_SOURCE_COMMIT=$OMARCHY_AARCH64_REF
+  validate_omarchy_repository_manifest "$fixture/repository-manifest.json"
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == 4.0.1.r1.g"${OMARCHY_AARCH64_REF:0:12}"-1 ]] ||
+    fail "repository/source version boundary was not captured"
+  pass "signed stable repository manifest is complete and matches the pinned Omarchy source"
 )
 
 mapfile -t image_profiles < <(find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
@@ -179,10 +198,6 @@ mapfile -t image_profiles < <(find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -typ
   fail "the current release must expose only the aarch64-virt image profile"
 pass "the current release exposes only the aarch64-virt image profile"
 
-grep -Fq 'BOOTAA64.EFI' "$ROOT/packages/limine-mkinitcpio-hook/limine-entry-tool-aarch64.patch" ||
-  fail "Limine patch does not install the AArch64 fallback loader"
-grep -Fq 'LIMINE_FORCE_UEFI' "$ROOT/packages/limine-mkinitcpio-hook/limine-entry-tool-aarch64.patch" ||
-  fail "Limine patch cannot configure an offline UEFI target"
 grep -Fq 'ENABLE_UKI=no' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/limine-entry-tool.d/99-aarch64-virt.conf" ||
   fail "AArch64 virt does not disable mkinitcpio's x86-64-only UKI mode"
@@ -191,41 +206,13 @@ grep -Fq 'path: boot():/Image' "$OMARCHY_TEST_SOURCE/default/limine/limine.conf"
 grep -Fq 'module_path: boot():/initramfs-linux.img' \
   "$OMARCHY_TEST_SOURCE/default/limine/limine.conf" ||
   fail "Limine does not use Arch Linux ARM's stable initramfs path"
-if rg -n '^[-+]makedepends=.*gradle|gradle-.*bin\.zip' \
-  "$ROOT/patches/omarchy-pkgs-source-build.patch" >/dev/null; then
-  fail "the upstream Limine Gradle dependency was rewritten"
-fi
-grep -Fq 'services.gradle.org/distributions/gradle-' "$ROOT/packages/gradle/PKGBUILD" ||
-  fail "the build-only Gradle bootstrap does not use the official distribution"
-grep -Fq 'acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a' \
-  "$ROOT/packages/gradle/PKGBUILD" ||
-  fail "the Gradle source is not pinned by its official SHA-256 digest"
-grep -q '"skip_build": true' "$ROOT/packages/gradle/package.json" ||
-  fail "the Gradle bootstrap could leak into an unscoped package build"
-if grep -qx gradle "$ROOT/config/source-packages.aarch64"; then
-  fail "the build-only Gradle bootstrap would be copied into image artifacts"
-fi
-pass "Limine packaging carries the AArch64/offline UEFI adaptation"
-
-grep -Fq 'pkgname=omarchy-spice-guest-tools' \
-  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
-  fail "the SPICE guest-tools package recipe is missing"
-grep -Fq '"source": "local"' \
-  "$ROOT/packages/source/omarchy-spice-guest-tools/.omarchy/package.json" ||
-  fail "the SPICE guest-tools recipe is not enabled for local builds"
-grep -Fq 'releases/download/v${pkgver}' \
-  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
-  fail "the SPICE guest-tools recipe does not consume a versioned release"
-grep -Fq "'c2027e9914ff92af59682029188da09fe46cabb232bf036be6be2956f01c2a0e'" \
-  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
-  fail "the SPICE guest-tools release is not checksum-pinned"
-if grep -Fq 'sockets.target.wants/spice-vdagentd.socket' \
-  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD"; then
-  fail "the SPICE package bypasses stock virtio-port udev socket activation"
-fi
+for package in limine-mkinitcpio-hook omarchy-spice-guest-tools; do
+  grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
+    fail "signed repository package is not selected: $package"
+done
 grep -Fq 'usr/bin/spice-guest-tools' "$ROOT/bin/build-image" ||
   fail "the image does not validate the SPICE guest-tools payload"
-pass "aarch64-virt integrates the pinned Omarchy SPICE guest package"
+pass "aarch64-virt consumes its adapted Limine and SPICE packages from the signed repository"
 
 grep -Fq 'plymouth-set-default-theme omarchy' "$ROOT/bin/build-image" ||
   fail "image assembly does not explicitly select the Omarchy boot theme"
@@ -293,9 +280,9 @@ grep -Fq 'gpgconf --homedir /etc/pacman.d/gnupg --kill all' "$ROOT/bin/build-ima
 grep -Fq 'process_root == "$MOUNT_DIR"' "$ROOT/bin/build-image" ||
   fail "target helper cleanup is not scoped to the disposable image root"
 grep -Fq 'managed-packages' "$ROOT/bin/build-image" ||
-  fail "the image does not record packages managed outside ALARM/AUR"
-grep -Fq 'validate_package_provenance' "$ROOT/bin/build-image" ||
-  fail "the image can combine packages with a different Omarchy source commit"
+  fail "the image does not record packages managed by the Omarchy repository"
+grep -Fq 'validate_omarchy_repository_manifest' "$ROOT/bin/build-image" ||
+  fail "the image can combine a repository snapshot with a different Omarchy source commit"
 grep -Fq 'etc/omarchy-aarch64/excluded-packages' "$ROOT/bin/build-image" ||
   fail "the image does not preserve profile exclusions for reinstall workflows"
 grep -Fq 'cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"' \
@@ -303,7 +290,7 @@ grep -Fq 'cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"' \
   fail "the profile overlay can leak the builder UID/GID into the target rootfs"
 grep -Fq 'root_owned_paths=(' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce trusted rootfs directory ownership"
-pass "container isolation, mount cleanup, ownership, and local-package update boundaries are guarded"
+pass "container isolation, mount cleanup, ownership, and repository update boundaries are guarded"
 
 grep -q '^ConditionPathExists=/var/lib/omarchy/provisioning/pending$' \
   "$OMARCHY_TEST_SOURCE/install/provisioning/omarchy-provision-owner.service" ||
@@ -316,12 +303,17 @@ if rg -n 'asahi-alarm|grub-install' "$ROOT/bin" "$ROOT/config" "$ROOT/profiles" 
 fi
 pass "active image orchestration is independent of Apple, Asahi, and GRUB"
 
-if rg -n '^\[(asahi-alarm|omarchy-aarch64)\]|omarchy-pkgs-aarch64/releases' \
-  "$OMARCHY_TEST_SOURCE/default/pacman/pacman-aarch64.conf" \
-  "$OMARCHY_TEST_SOURCE/default/pacman/mirrorlist-aarch64" >/dev/null; then
-  fail "the target pacman configuration enables a non-ALARM runtime repository"
+grep -q '^OMARCHY_AARCH64_REPOSITORY_URL=https://github.com/riverscn/omarchy-pkgs-aarch64/releases/latest/download$' \
+  "$ROOT/sources.env" || fail "image source does not track the latest stable AArch64 repository release"
+grep -Fq 'target_chroot pacman-key --lsign-key "$OMARCHY_AARCH64_SIGNING_FINGERPRINT"' \
+  "$ROOT/bin/build-image" || fail "repository bootstrap key is not locally trusted"
+grep -Fq 'pre-refresh-pacman.d/omarchy-aarch64-repository' "$ROOT/bin/build-image" ||
+  fail "Omarchy pacman refreshes can discard the AArch64 repository"
+if rg -n 'omarchy-mac/omarchy-pkgs-aarch64|OMARCHY_AARCH64_RELEASE_URL|pacman -U' \
+  "$ROOT/bin" "$ROOT/config" "$ROOT/sources.env" >/dev/null; then
+  fail "retired unsigned/local package installation remains active"
 fi
-pass "prebuilt inputs do not leak their unsigned repository into the guest"
+pass "the signed AArch64 repository remains enabled across system and Omarchy updates"
 
 nested_source_pattern='[$]PROJECT_ROOT/omarchy-aarch64|[$]ROOT/omarchy-aarch64'
 if rg -n "$nested_source_pattern" \

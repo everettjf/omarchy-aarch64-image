@@ -20,7 +20,7 @@ command -v realpath >/dev/null 2>&1 || fail "missing required command: realpath"
   fail "container image assembly currently requires a native AArch64 host"
 docker info >/dev/null 2>&1 || fail "Docker is unavailable or its daemon is not running"
 docker image inspect "$BUILDER_IMAGE" >/dev/null 2>&1 ||
-  fail "builder image not found: $BUILDER_IMAGE (run ./bin/build-packages first)"
+  fail "builder image not found: $BUILDER_IMAGE (build the AArch64 builder from omarchy-pkgs-aarch64/build first)"
 
 while (($#)); do
   case $1 in

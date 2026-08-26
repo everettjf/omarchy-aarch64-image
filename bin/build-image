@@ -28,7 +28,10 @@ ROOTFS_SIGNATURE=""
 ROOTFS_KEYRING=""
 ROOTFS_VERIFY_KEYRING=""
 NODE_TARBALL=""
-PACKAGE_DIR="$BUILD_DIR/packages/aarch64"
+OMARCHY_REPOSITORY_MANIFEST=""
+OMARCHY_REPOSITORY_KEY=""
+OMARCHY_REPOSITORY_GENERATED_AT=""
+OMARCHY_REPOSITORY_OMARCHY_VERSION=""
 OUTPUT_PATH=""
 FORCE=0
 REFRESH=0
@@ -72,7 +75,6 @@ Options:
   --output PATH          Output image path
   --size SIZE            Sparse virtual disk size (default: 64G)
   --format FORMAT        qcow2, raw, or both
-  --package-dir PATH     Directory produced by bin/build-packages
   --omarchy-source PATH  Explicit local Omarchy checkout (development only)
   --rootfs PATH          Use a local Arch Linux ARM rootfs tarball
   --rootfs-signature P   Detached signature for --rootfs
@@ -150,11 +152,6 @@ parse_args() {
         IMAGE_FORMAT=$2
         shift 2
         ;;
-      --package-dir)
-        (($# >= 2)) || fail "--package-dir requires a path"
-        PACKAGE_DIR=$(absolute_path "$2")
-        shift 2
-        ;;
       --omarchy-source)
         (($# >= 2)) || fail "--omarchy-source requires a path"
         [[ -z $OMARCHY_SOURCE_OVERRIDE ]] || fail "--omarchy-source may only be specified once"
@@ -223,10 +220,6 @@ validate_configuration() {
     remove-package-patterns runtime-packages shell-defaults.jq; do
     [[ -f $PROFILE_DIR/$profile_file ]] || fail "profile is missing $profile_file: $IMAGE_PROFILE"
   done
-  [[ -d $PACKAGE_DIR ]] || fail "package directory not found: $PACKAGE_DIR (run ./bin/build-packages first)"
-  compgen -G "$PACKAGE_DIR/*.pkg.tar.*" >/dev/null ||
-    fail "no package artifacts found in $PACKAGE_DIR"
-
   case $IMAGE_FORMAT in
     qcow2 | raw | both) ;;
     *) fail "unsupported image format: $IMAGE_FORMAT" ;;
@@ -380,52 +373,79 @@ resolve_node_tarball() {
   log "Verified $filename"
 }
 
-verify_source_packages() {
-  local package package_file name
-  local -A present=()
+validate_omarchy_repository_manifest() {
+  local manifest=${1:-$OMARCHY_REPOSITORY_MANIFEST}
+  local package source_fragment
 
-  while IFS= read -r -d '' package_file; do
-    name=$(pacman -Qp "$package_file" | awk '{print $1; exit}') ||
-      fail "cannot inspect package artifact: $package_file"
-    present[$name]=1
-  done < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' ! -name '*.sig' -print0)
+  jq --exit-status \
+    --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" '
+      .schema == 1
+      and .signing_fingerprint == $fingerprint
+      and .state.schema == 1
+      and .state.architecture == "aarch64"
+      and .state.channel == "stable"
+      and (.generated_at | type == "string" and length > 0)
+      and (.state.packages | type == "array")
+    ' "$manifest" >/dev/null ||
+    fail "Omarchy repository manifest has an unsupported identity or schema"
 
   while IFS= read -r package; do
-    [[ -n ${present[$package]:-} ]] || fail "missing source-built package artifact: $package"
-  done < <(read_list "$CONFIG_DIR/source-packages.aarch64")
+    jq --exit-status --arg package "$package" '
+      any(.state.packages[]; .name == $package and (.version | length > 0))
+    ' "$manifest" >/dev/null ||
+      fail "Omarchy repository does not publish required package: $package"
+  done < <(read_list "$CONFIG_DIR/omarchy-packages.aarch64")
+
+  OMARCHY_REPOSITORY_GENERATED_AT=$(jq -r '.generated_at' "$manifest")
+  OMARCHY_REPOSITORY_OMARCHY_VERSION=$(
+    jq -r '.state.packages[] | select(.name == "omarchy") | .version' "$manifest"
+  )
+  source_fragment=".g${OMARCHY_SOURCE_COMMIT:0:12}-"
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == *"$source_fragment"* ]] ||
+    fail "repository omarchy package $OMARCHY_REPOSITORY_OMARCHY_VERSION does not match source $OMARCHY_SOURCE_COMMIT"
 }
 
-validate_package_provenance() {
-  local provenance="$PACKAGE_DIR/provenance.txt"
-  local packaged_source packaged_dirty
+verify_omarchy_repository_key() {
+  local fingerprint
 
-  [[ -f $provenance ]] ||
-    fail "package provenance is missing: $provenance (rerun ./bin/build-packages)"
-  packaged_source=$(awk -F= '$1 == "omarchy_source" {print $2; exit}' "$provenance")
-  packaged_dirty=$(awk -F= '$1 == "omarchy_source_dirty" {print $2; exit}' "$provenance")
-  [[ $packaged_source == "$OMARCHY_SOURCE_COMMIT" ]] ||
-    fail "packages use Omarchy $packaged_source but image source is $OMARCHY_SOURCE_COMMIT; rebuild packages"
-  [[ $packaged_dirty == "$OMARCHY_SOURCE_DIRTY" ]] ||
-    fail "package/source dirty state differs; rebuild packages from the selected Omarchy checkout"
+  fingerprint=$(gpg --batch --with-colons --show-keys "$OMARCHY_REPOSITORY_KEY" 2>/dev/null |
+    awk -F: '$1 == "fpr" {print toupper($10); exit}')
+  [[ $fingerprint == "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" ]] ||
+    fail "Omarchy repository key is ${fingerprint:-invalid}, expected $OMARCHY_AARCH64_SIGNING_FINGERPRINT"
+}
+
+resolve_omarchy_repository() {
+  OMARCHY_REPOSITORY_MANIFEST="$CACHE_DIR/omarchy-aarch64-repository-manifest.json"
+  OMARCHY_REPOSITORY_KEY="$CACHE_DIR/omarchy-aarch64.gpg"
+
+  # These files describe releases/latest, so fetch them for every build rather
+  # than silently validating a stale cached snapshot against a newer database.
+  download_file "$OMARCHY_AARCH64_REPOSITORY_URL/repository-manifest.json" \
+    "$OMARCHY_REPOSITORY_MANIFEST"
+  download_file "$OMARCHY_AARCH64_REPOSITORY_URL/omarchy-aarch64.gpg" \
+    "$OMARCHY_REPOSITORY_KEY"
+  validate_omarchy_repository_manifest
+  verify_omarchy_repository_key
+  log "Verified signed Omarchy AArch64 repository snapshot from $OMARCHY_REPOSITORY_GENERATED_AT"
 }
 
 resolve_official_packages() {
   local base_list=${1:-$OMARCHY_SOURCE_DIR/install/omarchy-base.packages}
-  local source_list=${2:-$CONFIG_DIR/source-packages.aarch64}
+  local repository_list=${2:-$CONFIG_DIR/omarchy-packages.aarch64}
   local excluded_list=${3:-$PROFILE_DIR/excluded-packages}
   local replacement_list=${4:-$PROFILE_DIR/package-replacements}
   local runtime_list=${5:-$PROFILE_DIR/runtime-packages}
   local package replacement
-  local -A source_packages=() excluded_packages=() replacements=() selected=()
+  local -A repository_packages=() excluded_packages=() replacements=() selected=()
 
-  while IFS= read -r package; do source_packages[$package]=1; done < <(read_list "$source_list")
+  while IFS= read -r package; do repository_packages[$package]=1; done < <(read_list "$repository_list")
   while IFS= read -r package; do excluded_packages[$package]=1; done < <(read_list "$excluded_list")
   while read -r package replacement; do
     [[ -n ${package:-} ]] && replacements[$package]=$replacement
   done < <(read_list "$replacement_list")
 
   while IFS= read -r package; do
-    [[ -n ${source_packages[$package]:-} || -n ${excluded_packages[$package]:-} ]] && continue
+    [[ -n ${repository_packages[$package]:-} || -n ${excluded_packages[$package]:-} ]] && continue
     selected[${replacements[$package]:-$package}]=1
   done < <(read_list "$base_list")
   while IFS= read -r package; do selected[$package]=1; done < <(read_list "$runtime_list")
@@ -714,52 +734,87 @@ retry_target_pacman() {
   done
 }
 
+write_omarchy_repository_configuration() {
+  local pacman_conf="$MOUNT_DIR/etc/pacman.conf"
+  local repository_conf="$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf"
+  local include='Include = /etc/pacman.d/omarchy-aarch64.conf'
+  local hook="$MOUNT_DIR/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository"
+
+  install -d -m755 "${repository_conf%/*}" "${hook%/*}"
+  cat >"$repository_conf" <<EOF
+# Managed by omarchy-aarch64-image.
+[omarchy]
+SigLevel = Required
+Server = $OMARCHY_AARCH64_REPOSITORY_URL
+EOF
+
+  if ! grep -qxF "$include" "$pacman_conf"; then
+    sed -i "0,/^\[core\]/s||$include\n\n[core]|" "$pacman_conf"
+  fi
+
+  cat >"$hook" <<'EOF'
+#!/bin/bash
+
+# omarchy-refresh-pacman replaces /etc/pacman.conf from its channel template.
+# Restore the signed AArch64 repository include before the upgrade proceeds.
+set -euo pipefail
+
+readonly CONF=/etc/pacman.conf
+readonly INCLUDE='Include = /etc/pacman.d/omarchy-aarch64.conf'
+
+grep -qxF "$INCLUDE" "$CONF" && exit 0
+sudo sed -i "0,/^\[core\]/s||$INCLUDE\n\n[core]|" "$CONF"
+EOF
+  chmod 755 "$hook"
+}
+
 configure_package_manager() {
+  local staged_key=/tmp/omarchy-aarch64.gpg
+
   install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/pacman-aarch64.conf" "$MOUNT_DIR/etc/pacman.conf"
   install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/mirrorlist-aarch64" "$MOUNT_DIR/etc/pacman.d/mirrorlist"
+  write_omarchy_repository_configuration
   target_chroot pacman-key --init
   if [[ -f $MOUNT_DIR/usr/share/pacman/keyrings/archlinux.gpg ]]; then
     target_chroot pacman-key --populate archlinux
   fi
   target_chroot pacman-key --populate archlinuxarm
+  install -m644 "$OMARCHY_REPOSITORY_KEY" "$MOUNT_DIR$staged_key"
+  target_chroot pacman-key --add "$staged_key"
+  target_chroot pacman-key --lsign-key "$OMARCHY_AARCH64_SIGNING_FINGERPRINT"
+  rm -f -- "$MOUNT_DIR$staged_key"
 }
 
 install_packages() {
-  local package package_file package_name boot_hook_package=""
-  local -a official_packages=() local_packages=()
+  local package
+  local -a official_packages=() repo_install_packages=()
 
   mapfile -t official_packages < <(resolve_official_packages)
   ((${#official_packages[@]} > 0)) || fail "resolved official package set is empty"
+  while IFS= read -r package; do
+    case $package in
+      omarchy-aarch64-keyring | limine-mkinitcpio-hook) ;;
+      *) repo_install_packages+=("$package") ;;
+    esac
+  done < <(read_list "$CONFIG_DIR/omarchy-packages.aarch64")
+
   mount_package_cache
-  log "Installing ${#official_packages[@]} Arch Linux ARM packages"
-  retry_target_pacman -Syu --needed --noconfirm "${official_packages[@]}"
+  log "Installing ${#official_packages[@]} Arch Linux ARM packages and the repository keyring"
+  retry_target_pacman -Syu --needed --noconfirm \
+    omarchy-aarch64-keyring "${official_packages[@]}"
+  target_chroot pacman-key --populate omarchy-aarch64
 
-  mkdir -p "$MOUNT_DIR/opt/omarchy-packages"
-  while IFS= read -r -d '' package_file; do
-    package_name=$(pacman -Qp "$package_file" | awk '{print $1; exit}') ||
-      fail "cannot inspect package artifact: $package_file"
-    package=${package_file##*/}
-    install -m644 "$package_file" "$MOUNT_DIR/opt/omarchy-packages/$package"
-    if [[ $package_name == limine-mkinitcpio-hook ]]; then
-      boot_hook_package="/opt/omarchy-packages/$package"
-    else
-      local_packages+=("/opt/omarchy-packages/$package")
-    fi
-  done < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' ! -name '*.sig' -print0)
-
-  [[ -n $boot_hook_package ]] || fail "limine-mkinitcpio-hook artifact was not selected"
-  log "Installing the Limine mkinitcpio hook before the remaining local packages"
+  log "Installing the Limine mkinitcpio hook from the signed Omarchy repository"
   mask_target_boot_hooks "${LIMINE_INSTALL_HOOKS[@]}"
-  retry_target_pacman -U --needed --noconfirm "$boot_hook_package"
+  retry_target_pacman -S --needed --noconfirm limine-mkinitcpio-hook
   unmask_target_boot_hooks "${LIMINE_INSTALL_HOOKS[@]}"
 
-  if ((${#local_packages[@]} > 0)); then
-    log "Installing ${#local_packages[@]} source-built package artifacts"
+  if ((${#repo_install_packages[@]} > 0)); then
+    log "Installing ${#repo_install_packages[@]} packages from the signed Omarchy repository"
     mask_target_boot_hooks "${DEFERRED_BOOT_HOOKS[@]}"
-    retry_target_pacman -U --needed --noconfirm "${local_packages[@]}"
+    retry_target_pacman -S --needed --noconfirm "${repo_install_packages[@]}"
     unmask_target_boot_hooks "${DEFERRED_BOOT_HOOKS[@]}"
   fi
-  rm -rf -- "$MOUNT_DIR/opt/omarchy-packages"
   unmount_package_cache
 }
 
@@ -794,7 +849,7 @@ EOF
   printf '%s\n' "$IMAGE_PROFILE" >"$MOUNT_DIR/etc/omarchy-aarch64/profile"
   read_list "$PROFILE_DIR/excluded-packages" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/excluded-packages"
-  read_list "$CONFIG_DIR/source-packages.aarch64" \
+  read_list "$CONFIG_DIR/omarchy-packages.aarch64" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
 }
@@ -942,23 +997,23 @@ write_image_provenance() {
     printf 'omarchy_source_ref=%s\n' "$OMARCHY_AARCH64_REF"
     printf 'omarchy_source_kind=%s\n' "$OMARCHY_SOURCE_KIND"
     printf 'omarchy_source_dirty=%s\n' "$OMARCHY_SOURCE_DIRTY"
-    printf 'omarchy_pkgs_source=%s\n' "$OMARCHY_PKGS_REF"
-    if [[ -f $PACKAGE_DIR/provenance.txt ]]; then
-      printf 'package_provenance_sha256=%s\n' "$(sha256sum "$PACKAGE_DIR/provenance.txt" | awk '{print $1}')"
-    fi
+    printf 'omarchy_repository=%s\n' "$OMARCHY_AARCH64_REPOSITORY_URL"
+    printf 'omarchy_repository_signing_fingerprint=%s\n' "$OMARCHY_AARCH64_SIGNING_FINGERPRINT"
+    printf 'omarchy_repository_generated_at=%s\n' "$OMARCHY_REPOSITORY_GENERATED_AT"
+    printf 'omarchy_repository_manifest_sha256=%s\n' \
+      "$(sha256sum "$OMARCHY_REPOSITORY_MANIFEST" | awk '{print $1}')"
+    printf 'omarchy_repository_omarchy_version=%s\n' "$OMARCHY_REPOSITORY_OMARCHY_VERSION"
     printf 'image_profile=%s\n' "$IMAGE_PROFILE"
     printf 'image_format=%s\n' "$IMAGE_FORMAT"
     printf 'image_size=%s\n' "$IMAGE_SIZE"
   } >"$destination"
-  if [[ -f $PACKAGE_DIR/provenance.txt ]]; then
-    install -m644 "$PACKAGE_DIR/provenance.txt" \
-      "$MOUNT_DIR/usr/share/omarchy-aarch64/package-build.txt"
-  fi
+  install -m644 "$OMARCHY_REPOSITORY_MANIFEST" \
+    "$MOUNT_DIR/usr/share/omarchy-aarch64/repository-manifest.json"
   install -m644 "$destination" "$BUILD_DIR/image-provenance.txt"
 }
 
 validate_target() {
-  local owner required initramfs_listing
+  local owner required initramfs_listing package installed_version expected_version
   local -a installed_exclusions=()
   local -a removed_packages=()
   local -a root_owned_paths=(
@@ -981,7 +1036,9 @@ validate_target() {
     etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
     etc/omarchy-aarch64/excluded-packages
     etc/omarchy-aarch64/profile
+    etc/pacman.d/omarchy-aarch64.conf
     etc/plymouth/plymouthd.conf
+    etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository
     etc/snapper/configs/root
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
@@ -992,6 +1049,8 @@ validate_target() {
     usr/lib/systemd/user/graphical-session.target.wants/spice-guest-tools-bootstrap.service
     usr/lib/systemd/user/spice-clipboard-bridge.service
     usr/lib/systemd/user/spice-display-bridge.service
+    usr/share/omarchy-aarch64/repository-manifest.json
+    usr/share/pacman/keyrings/omarchy-aarch64.gpg
     usr/share/omarchy/version
     usr/share/plymouth/themes/omarchy/omarchy.plymouth
     var/lib/omarchy/provisioning/pending
@@ -1031,13 +1090,33 @@ validate_target() {
     fail "target validation failed: the Omarchy theme is missing from the generated initramfs"
   grep -q '^\[alarm\]$' "$MOUNT_DIR/etc/pacman.conf" ||
     fail "target validation failed: pacman is not configured for Arch Linux ARM"
-  if grep -q '^\[omarchy\]$\|^\[multilib\]$' "$MOUNT_DIR/etc/pacman.conf"; then
-    fail "target validation failed: an x86/custom binary repository remains enabled"
+  grep -qxF 'Include = /etc/pacman.d/omarchy-aarch64.conf' "$MOUNT_DIR/etc/pacman.conf" ||
+    fail "target validation failed: pacman does not include the Omarchy AArch64 repository"
+  grep -q '^\[omarchy\]$' "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "target validation failed: the Omarchy AArch64 repository has no [omarchy] section"
+  grep -qxF 'SigLevel = Required' "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "target validation failed: the Omarchy AArch64 repository does not require signatures"
+  grep -qxF "Server = $OMARCHY_AARCH64_REPOSITORY_URL" \
+    "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "target validation failed: the Omarchy AArch64 repository URL is incorrect"
+  if grep -q '^\[multilib\]$' "$MOUNT_DIR/etc/pacman.conf"; then
+    fail "target validation failed: the x86-only multilib repository remains enabled"
   fi
-  target_chroot pacman -Q omarchy omarchy-settings omarchy-spice-guest-tools \
+  target_chroot pacman-key --list-keys "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" >/dev/null ||
+    fail "target validation failed: the Omarchy AArch64 signing key is not trusted"
+  target_chroot pacman -Q omarchy-aarch64-keyring omarchy omarchy-settings omarchy-spice-guest-tools \
     limine limine-mkinitcpio-hook limine-snapper-sync plymouth snapper \
     gst-plugin-pipewire pipewire pipewire-alsa \
     pipewire-audio pipewire-jack pipewire-pulse wireplumber >/dev/null
+  while IFS= read -r package; do
+    expected_version=$(jq -r --arg package "$package" '
+      .state.packages[] | select(.name == $package) | .version
+    ' "$OMARCHY_REPOSITORY_MANIFEST")
+    installed_version=$(target_chroot pacman -Q "$package" | awk '{print $2; exit}') ||
+      fail "target validation failed: repository package is missing: $package"
+    [[ $installed_version == "$expected_version" ]] ||
+      fail "target validation failed: $package is $installed_version, expected $expected_version from the verified repository snapshot"
+  done < <(read_list "$CONFIG_DIR/omarchy-packages.aarch64")
   mapfile -t installed_exclusions < <(
     comm -12 \
       <(read_list "$PROFILE_DIR/excluded-packages" | sort -u) \
@@ -1225,10 +1304,9 @@ main() {
   resolve_omarchy_source
   validate_configuration
   validate_outputs
-  verify_source_packages
-  validate_package_provenance
 
   mkdir -p "$CACHE_DIR"
+  resolve_omarchy_repository
   resolve_keyring
   prepare_verification_keyring
   resolve_rootfs
@@ -1247,6 +1325,9 @@ main() {
   install_packages
   configure_base_system
   apply_omarchy_system
+  # omarchy-apply-system restores the target pacman template. Layer the signed
+  # AArch64 repository back on it and provision the refresh hook for the owner.
+  write_omarchy_repository_configuration
   stage_first_boot_provisioning
   remove_profile_packages
   configure_limine

@@ -1,6 +1,5 @@
-# Packages supplied as local image artifacts. Entries present in
-# prebuilt-packages.aarch64 are fetched and checksum-verified; the remainder
-# are built from the pinned PKGBUILDs.
+# Packages installed and updated from the signed [omarchy] AArch64 repository.
+omarchy-aarch64-keyring
 omarchy-keyring
 limine-mkinitcpio-hook
 limine-snapper-sync
