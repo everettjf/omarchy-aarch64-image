@@ -1,0 +1,27 @@
+# Boot and guest stack owned by the aarch64-virt image profile.
+base
+btrfs-progs
+dosfstools
+efibootmgr
+kbd
+limine
+linux-aarch64
+mesa
+mkinitcpio
+networkmanager
+parted
+gst-plugin-pipewire
+pipewire
+pipewire-alsa
+pipewire-audio
+pipewire-jack
+pipewire-pulse
+qemu-guest-agent
+snapper
+spice-vdagent
+sudo
+vulkan-swrast
+vulkan-virtio
+wireplumber
+xdg-user-dirs
+zram-generator

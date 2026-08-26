@@ -1,0 +1,11 @@
+[Unit]
+Description=Expand the Omarchy AArch64 root filesystem to its virtual disk
+ConditionVirtualization=vm
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omarchy-aarch64/grow-root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Packages present in the ALARM Generic rootfs but deliberately absent from the
+# final virtual-machine profile. These are extended regular expressions matched
+# against installed package names and removed through pacman, never by deleting
+# package-owned files directly.
+^haveged$
+^dhcpcd$
+^ex-vi-compat$
+^nano$
+^net-tools$
+^netctl$
+^linux-firmware($|-)
+^sof-firmware$

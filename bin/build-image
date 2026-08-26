@@ -1,0 +1,1271 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly PROJECT_ROOT
+readonly CONFIG_DIR="$PROJECT_ROOT/config"
+readonly BUILD_DIR="$PROJECT_ROOT/build"
+readonly CACHE_DIR="$BUILD_DIR/cache"
+readonly PACMAN_CACHE_DIR="$CACHE_DIR/pacman-aarch64"
+
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/sources.env"
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/lib/omarchy-source.sh"
+
+IMAGE_PROFILE="aarch64-virt"
+PROFILE_DIR=""
+OVERLAY_DIR=""
+IMAGE_OUTPUT=""
+IMAGE_SIZE=""
+IMAGE_FORMAT=""
+ESP_SIZE_MIB=""
+ROOT_LABEL=""
+ESP_LABEL=""
+ROOTFS_PATH=""
+ROOTFS_SIGNATURE=""
+ROOTFS_KEYRING=""
+ROOTFS_VERIFY_KEYRING=""
+NODE_TARBALL=""
+PACKAGE_DIR="$BUILD_DIR/packages/aarch64"
+OUTPUT_PATH=""
+FORCE=0
+REFRESH=0
+
+LOOP_DEVICE=""
+MOUNT_DIR=""
+RAW_TEMP=""
+MANIFEST_STAGE_DIR=""
+BUILD_COMPLETE=0
+PACKAGE_CACHE_MOUNTED=0
+
+readonly -a DEFERRED_BOOT_HOOKS=(
+  60-mkinitcpio-remove.hook
+  60-limine-mkinitcpio-remove-pre.hook
+  80-limine-efi-deploy.hook
+  90-limine-mkinitcpio-remove-post.hook
+  90-mkinitcpio-install.hook
+)
+readonly -a LIMINE_INSTALL_HOOKS=(80-limine-efi-deploy.hook)
+readonly -a INITRAMFS_INSTALL_HOOKS=(90-mkinitcpio-install.hook)
+
+log() {
+  printf '\033[32m==>\033[0m %s\n' "$*"
+}
+
+warn() {
+  printf '\033[33mWarning:\033[0m %s\n' "$*" >&2
+}
+
+fail() {
+  printf '\033[31mError:\033[0m %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: sudo ./bin/build-image [options]
+
+Options:
+  --profile NAME         Image profile (currently: aarch64-virt)
+  --output PATH          Output image path
+  --size SIZE            Sparse virtual disk size (default: 64G)
+  --format FORMAT        qcow2, raw, or both
+  --package-dir PATH     Directory produced by bin/build-packages
+  --omarchy-source PATH  Explicit local Omarchy checkout (development only)
+  --rootfs PATH          Use a local Arch Linux ARM rootfs tarball
+  --rootfs-signature P   Detached signature for --rootfs
+  --rootfs-keyring PATH  Arch Linux ARM GPG keyring
+  --node-tarball PATH    Use a local linux-arm64 Node.js archive
+  --refresh              Refresh cached rolling downloads
+  --force                Replace the exact requested output path(s)
+  -h, --help             Show this help
+
+Image assembly executes AArch64 target commands in a chroot and therefore
+requires a native AArch64 Arch Linux ARM host.
+EOF
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+absolute_path() {
+  realpath -m "$1"
+}
+
+read_list() {
+  sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"
+}
+
+select_profile() {
+  local selected="aarch64-virt"
+  local profile_count=0
+  local -a arguments=("$@")
+  local index
+
+  for ((index = 0; index < ${#arguments[@]}; index++)); do
+    if [[ ${arguments[$index]} == --profile ]]; then
+      ((index + 1 < ${#arguments[@]})) || fail "--profile requires a name"
+      ((profile_count += 1))
+      ((profile_count == 1)) || fail "--profile may only be specified once"
+      selected=${arguments[$((index + 1))]}
+      ((index += 1))
+    fi
+  done
+
+  [[ $selected =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid profile name: $selected"
+  PROFILE_DIR="$PROJECT_ROOT/profiles/$selected"
+  [[ -d $PROFILE_DIR ]] || fail "unsupported image profile: $selected"
+  [[ -f $PROFILE_DIR/image.env ]] || fail "profile is missing image.env: $selected"
+
+  IMAGE_PROFILE=$selected
+  # shellcheck disable=SC1090,SC1091
+  source "$PROFILE_DIR/image.env"
+  OVERLAY_DIR="$PROFILE_DIR/overlay"
+  OUTPUT_PATH="$PROJECT_ROOT/$IMAGE_OUTPUT"
+}
+
+parse_args() {
+  while (($#)); do
+    case $1 in
+      --profile)
+        (($# >= 2)) || fail "--profile requires a name"
+        [[ $2 == "$IMAGE_PROFILE" ]] || fail "profile selection changed while parsing arguments"
+        shift 2
+        ;;
+      --output)
+        (($# >= 2)) || fail "--output requires a path"
+        OUTPUT_PATH=$(absolute_path "$2")
+        shift 2
+        ;;
+      --size)
+        (($# >= 2)) || fail "--size requires a value"
+        IMAGE_SIZE=$2
+        shift 2
+        ;;
+      --format)
+        (($# >= 2)) || fail "--format requires qcow2, raw, or both"
+        IMAGE_FORMAT=$2
+        shift 2
+        ;;
+      --package-dir)
+        (($# >= 2)) || fail "--package-dir requires a path"
+        PACKAGE_DIR=$(absolute_path "$2")
+        shift 2
+        ;;
+      --omarchy-source)
+        (($# >= 2)) || fail "--omarchy-source requires a path"
+        [[ -z $OMARCHY_SOURCE_OVERRIDE ]] || fail "--omarchy-source may only be specified once"
+        OMARCHY_SOURCE_OVERRIDE=$2
+        shift 2
+        ;;
+      --rootfs)
+        (($# >= 2)) || fail "--rootfs requires a path"
+        ROOTFS_PATH=$(absolute_path "$2")
+        shift 2
+        ;;
+      --rootfs-signature)
+        (($# >= 2)) || fail "--rootfs-signature requires a path"
+        ROOTFS_SIGNATURE=$(absolute_path "$2")
+        shift 2
+        ;;
+      --rootfs-keyring)
+        (($# >= 2)) || fail "--rootfs-keyring requires a path"
+        ROOTFS_KEYRING=$(absolute_path "$2")
+        shift 2
+        ;;
+      --node-tarball)
+        (($# >= 2)) || fail "--node-tarball requires a path"
+        NODE_TARBALL=$(absolute_path "$2")
+        shift 2
+        ;;
+      --refresh)
+        REFRESH=1
+        shift
+        ;;
+      --force)
+        FORCE=1
+        shift
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        fail "unknown option: $1"
+        ;;
+    esac
+  done
+}
+
+raw_output_path() {
+  if [[ $IMAGE_FORMAT == raw ]]; then
+    printf '%s' "$OUTPUT_PATH"
+  elif [[ $OUTPUT_PATH == *.qcow2 ]]; then
+    printf '%s.raw' "${OUTPUT_PATH%.qcow2}"
+  else
+    printf '%s.raw' "$OUTPUT_PATH"
+  fi
+}
+
+validate_configuration() {
+  local image_bytes profile_file
+
+  [[ $(uname -m) == aarch64 || $(uname -m) == arm64 ]] ||
+    fail "image assembly requires a native AArch64 host; detected $(uname -m)"
+  ((EUID == 0)) || fail "run image assembly as root"
+  [[ -d $OMARCHY_SOURCE_DIR/.git ]] || fail "Omarchy source is unavailable"
+  [[ -d $OVERLAY_DIR ]] || fail "profile overlay not found: $OVERLAY_DIR"
+  for profile_file in excluded-packages package-replacements \
+    remove-package-patterns runtime-packages shell-defaults.jq; do
+    [[ -f $PROFILE_DIR/$profile_file ]] || fail "profile is missing $profile_file: $IMAGE_PROFILE"
+  done
+  [[ -d $PACKAGE_DIR ]] || fail "package directory not found: $PACKAGE_DIR (run ./bin/build-packages first)"
+  compgen -G "$PACKAGE_DIR/*.pkg.tar.*" >/dev/null ||
+    fail "no package artifacts found in $PACKAGE_DIR"
+
+  case $IMAGE_FORMAT in
+    qcow2 | raw | both) ;;
+    *) fail "unsupported image format: $IMAGE_FORMAT" ;;
+  esac
+
+  image_bytes=$(numfmt --from=iec "$IMAGE_SIZE") || fail "invalid image size: $IMAGE_SIZE"
+  ((image_bytes >= 16 * 1024 * 1024 * 1024)) || fail "image size must be at least 16 GiB"
+  ((ESP_SIZE_MIB >= 512)) || fail "ESP_SIZE_MIB must be at least 512"
+
+  validate_remove_package_patterns
+
+  if [[ $IMAGE_FORMAT == qcow2 || $IMAGE_FORMAT == both ]]; then
+    require_command qemu-img
+  fi
+}
+
+validate_outputs() {
+  local raw_output
+  raw_output=$(raw_output_path)
+
+  mkdir -p "$(dirname -- "$OUTPUT_PATH")"
+  rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part" \
+    "$raw_output.part" "$raw_output.sha256.part"
+  if [[ -e $OUTPUT_PATH && $FORCE == 0 ]]; then
+    fail "output already exists: $OUTPUT_PATH (use --force to replace it)"
+  fi
+  if [[ $IMAGE_FORMAT == both && -e $raw_output && $FORCE == 0 ]]; then
+    fail "output already exists: $raw_output (use --force to replace it)"
+  fi
+
+  return 0
+}
+
+download_file() {
+  local url=$1 destination=$2 partial="$2.part"
+  log "Downloading ${url##*/}"
+  rm -f -- "$destination"
+  if ((REFRESH)); then
+    rm -f -- "$partial"
+  fi
+  curl --fail --location \
+    --continue-at - \
+    --connect-timeout 30 \
+    --speed-limit 32768 \
+    --speed-time 30 \
+    --retry 8 \
+    --retry-all-errors \
+    --retry-delay 2 \
+    --output "$partial" \
+    "$url"
+  mv "$partial" "$destination"
+}
+
+resolve_keyring() {
+  if [[ -n $ROOTFS_KEYRING ]]; then
+    [[ -f $ROOTFS_KEYRING ]] || fail "rootfs keyring not found: $ROOTFS_KEYRING"
+    return
+  fi
+
+  if [[ -f /usr/share/pacman/keyrings/archlinuxarm.gpg ]]; then
+    ROOTFS_KEYRING=/usr/share/pacman/keyrings/archlinuxarm.gpg
+    return
+  fi
+
+  ROOTFS_KEYRING="$CACHE_DIR/archlinuxarm.gpg"
+  if [[ ! -f $ROOTFS_KEYRING || $REFRESH == 1 ]]; then
+    download_file "$ARCHLINUXARM_KEYRING_URL" "$ROOTFS_KEYRING"
+  fi
+}
+
+prepare_verification_keyring() {
+  local source_digest partial
+
+  source_digest=$(sha256sum "$ROOTFS_KEYRING" | awk '{print $1}')
+  ROOTFS_VERIFY_KEYRING="$CACHE_DIR/archlinuxarm-rootfs-$source_digest.gpg"
+  [[ -f $ROOTFS_VERIFY_KEYRING ]] && return
+
+  partial="$ROOTFS_VERIFY_KEYRING.part"
+  rm -f -- "$partial"
+  if grep -a -q -- '-----BEGIN PGP PUBLIC KEY BLOCK-----' "$ROOTFS_KEYRING"; then
+    gpg --batch --yes --dearmor --output "$partial" "$ROOTFS_KEYRING" || {
+      rm -f -- "$partial"
+      fail "failed to convert the Arch Linux ARM keyring to binary format"
+    }
+  else
+    install -m644 "$ROOTFS_KEYRING" "$partial"
+  fi
+  mv "$partial" "$ROOTFS_VERIFY_KEYRING"
+}
+
+resolve_rootfs() {
+  if [[ -n $ROOTFS_PATH ]]; then
+    [[ -f $ROOTFS_PATH ]] || fail "rootfs not found: $ROOTFS_PATH"
+    if [[ -z $ROOTFS_SIGNATURE ]]; then
+      ROOTFS_SIGNATURE="$ROOTFS_PATH.sig"
+    fi
+    [[ -f $ROOTFS_SIGNATURE ]] ||
+      fail "rootfs signature not found: $ROOTFS_SIGNATURE (pass --rootfs-signature)"
+    return
+  fi
+
+  ROOTFS_PATH="$CACHE_DIR/${ROOTFS_URL##*/}"
+  ROOTFS_SIGNATURE="$ROOTFS_PATH.sig"
+  if [[ ! -f $ROOTFS_PATH || $REFRESH == 1 ]]; then
+    download_file "$ROOTFS_URL" "$ROOTFS_PATH"
+  fi
+  if [[ ! -f $ROOTFS_SIGNATURE || $REFRESH == 1 ]]; then
+    download_file "$ROOTFS_URL.sig" "$ROOTFS_SIGNATURE"
+  fi
+}
+
+verify_rootfs() {
+  local status signer
+  status=$(gpgv --status-fd=1 --keyring "$ROOTFS_VERIFY_KEYRING" \
+    "$ROOTFS_SIGNATURE" "$ROOTFS_PATH" 2>&1) || {
+      printf '%s\n' "$status" >&2
+      fail "Arch Linux ARM rootfs signature verification failed"
+    }
+  signer=$(awk '$2 == "VALIDSIG" {print $3; exit}' <<<"$status")
+  [[ $signer == "$ROOTFS_SIGNING_FINGERPRINT" ]] ||
+    fail "rootfs was signed by ${signer:-unknown}, expected $ROOTFS_SIGNING_FINGERPRINT"
+  log "Verified Arch Linux ARM rootfs signature"
+}
+
+resolve_node_tarball() {
+  local checksums filename expected actual
+
+  if [[ -n $NODE_TARBALL ]]; then
+    [[ -f $NODE_TARBALL ]] || fail "Node.js archive not found: $NODE_TARBALL"
+    [[ ${NODE_TARBALL##*/} == node-v*-linux-arm64.tar.gz ]] ||
+      fail "first-boot provisioning requires a linux-arm64 Node.js archive"
+    return
+  fi
+
+  checksums="$CACHE_DIR/node-SHASUMS256.txt"
+  if [[ ! -f $checksums || $REFRESH == 1 ]]; then
+    download_file "$NODE_DIST_URL/SHASUMS256.txt" "$checksums"
+  fi
+  read -r expected filename < <(
+    awk '$2 ~ /^node-v[0-9].*-linux-arm64\.tar\.gz$/ {print $1, $2; exit}' "$checksums"
+  )
+  [[ $expected =~ ^[0-9a-f]{64}$ && -n $filename ]] ||
+    fail "no linux-arm64 Node.js archive found in $NODE_DIST_URL/SHASUMS256.txt"
+
+  NODE_TARBALL="$CACHE_DIR/$filename"
+  if [[ ! -f $NODE_TARBALL || $REFRESH == 1 ]]; then
+    download_file "$NODE_DIST_URL/$filename" "$NODE_TARBALL"
+  fi
+  actual=$(sha256sum "$NODE_TARBALL" | awk '{print $1}')
+  [[ $actual == "$expected" ]] || fail "Node.js archive checksum mismatch"
+  log "Verified $filename"
+}
+
+verify_source_packages() {
+  local package package_file name
+  local -A present=()
+
+  while IFS= read -r -d '' package_file; do
+    name=$(pacman -Qp "$package_file" | awk '{print $1; exit}') ||
+      fail "cannot inspect package artifact: $package_file"
+    present[$name]=1
+  done < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' ! -name '*.sig' -print0)
+
+  while IFS= read -r package; do
+    [[ -n ${present[$package]:-} ]] || fail "missing source-built package artifact: $package"
+  done < <(read_list "$CONFIG_DIR/source-packages.aarch64")
+}
+
+validate_package_provenance() {
+  local provenance="$PACKAGE_DIR/provenance.txt"
+  local packaged_source packaged_dirty
+
+  [[ -f $provenance ]] ||
+    fail "package provenance is missing: $provenance (rerun ./bin/build-packages)"
+  packaged_source=$(awk -F= '$1 == "omarchy_source" {print $2; exit}' "$provenance")
+  packaged_dirty=$(awk -F= '$1 == "omarchy_source_dirty" {print $2; exit}' "$provenance")
+  [[ $packaged_source == "$OMARCHY_SOURCE_COMMIT" ]] ||
+    fail "packages use Omarchy $packaged_source but image source is $OMARCHY_SOURCE_COMMIT; rebuild packages"
+  [[ $packaged_dirty == "$OMARCHY_SOURCE_DIRTY" ]] ||
+    fail "package/source dirty state differs; rebuild packages from the selected Omarchy checkout"
+}
+
+resolve_official_packages() {
+  local base_list=${1:-$OMARCHY_SOURCE_DIR/install/omarchy-base.packages}
+  local source_list=${2:-$CONFIG_DIR/source-packages.aarch64}
+  local excluded_list=${3:-$PROFILE_DIR/excluded-packages}
+  local replacement_list=${4:-$PROFILE_DIR/package-replacements}
+  local runtime_list=${5:-$PROFILE_DIR/runtime-packages}
+  local package replacement
+  local -A source_packages=() excluded_packages=() replacements=() selected=()
+
+  while IFS= read -r package; do source_packages[$package]=1; done < <(read_list "$source_list")
+  while IFS= read -r package; do excluded_packages[$package]=1; done < <(read_list "$excluded_list")
+  while read -r package replacement; do
+    [[ -n ${package:-} ]] && replacements[$package]=$replacement
+  done < <(read_list "$replacement_list")
+
+  while IFS= read -r package; do
+    [[ -n ${source_packages[$package]:-} || -n ${excluded_packages[$package]:-} ]] && continue
+    selected[${replacements[$package]:-$package}]=1
+  done < <(read_list "$base_list")
+  while IFS= read -r package; do selected[$package]=1; done < <(read_list "$runtime_list")
+
+  printf '%s\n' "${!selected[@]}" | sort
+}
+
+cleanup() {
+  local status=$?
+  local raw_output side
+  local -a mount_roots=()
+
+  if [[ $MOUNT_DIR == /tmp/omarchy-aarch64-image.* ]]; then
+    # Validation failures happen before the normal detach path. Stop gpg-agent
+    # and any other helpers rooted in the disposable chroot before attempting
+    # to unmount it, just as a successful build does.
+    if [[ -d $MOUNT_DIR ]] && path_has_mounts "$MOUNT_DIR"; then
+      stop_target_background_helpers || true
+    fi
+    mount_roots=("$MOUNT_DIR" "$MOUNT_DIR.factory" "$MOUNT_DIR.top" "$MOUNT_DIR.boot")
+    for side in "${mount_roots[@]}"; do
+      if [[ -d $side ]] && path_has_mounts "$side"; then
+        if ! umount -R -- "$side" >/dev/null 2>&1; then
+          warn "normal unmount failed; lazily detaching temporary image tree: $side"
+          umount -R -l -- "$side" >/dev/null 2>&1 ||
+            warn "failed to detach temporary image tree: $side"
+        fi
+      fi
+    done
+  fi
+  if [[ -n $LOOP_DEVICE ]]; then
+    losetup -d "$LOOP_DEVICE" >/dev/null 2>&1 || true
+  fi
+  for side in "${mount_roots[@]}"; do
+    [[ -d $side ]] || continue
+    if path_has_mounts "$side"; then
+      warn "leaving mounted temporary image tree untouched: $side"
+    elif ! rmdir -- "$side" >/dev/null 2>&1; then
+      warn "leaving non-empty temporary image directory untouched: $side"
+    fi
+  done
+  if [[ -n $LOOP_DEVICE ]] && losetup "$LOOP_DEVICE" >/dev/null 2>&1; then
+    warn "loop device remains attached after failed cleanup: $LOOP_DEVICE"
+  fi
+  if ((BUILD_COMPLETE == 0)) && [[ -n $RAW_TEMP && -f $RAW_TEMP ]]; then
+    rm -f -- "$RAW_TEMP"
+  fi
+  if [[ $MANIFEST_STAGE_DIR == "$BUILD_DIR"/.omarchy-aarch64-manifests.* &&
+    -d $MANIFEST_STAGE_DIR ]]; then
+    find "$MANIFEST_STAGE_DIR" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir -- "$MANIFEST_STAGE_DIR"
+  fi
+  if [[ -n $OUTPUT_PATH ]]; then
+    raw_output=$(raw_output_path)
+    rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part" \
+      "$raw_output.part" "$raw_output.sha256.part"
+  fi
+
+  return "$status"
+}
+
+path_has_mounts() {
+  local root=$1 target
+
+  while IFS= read -r target; do
+    if [[ $target == "$root" || $target == "$root/"* ]]; then
+      return 0
+    fi
+  done < <(findmnt -rn -o TARGET)
+  return 1
+}
+
+ensure_loop_partition_nodes() {
+  local loop_name=${LOOP_DEVICE##*/}
+  local partition node sys_dev major minor attempt
+
+  for partition in 1 2; do
+    node="${LOOP_DEVICE}p${partition}"
+    [[ -b $node ]] && continue
+
+    sys_dev="/sys/class/block/${loop_name}p${partition}/dev"
+    attempt=0
+    while ((attempt < 50)); do
+      [[ -r $sys_dev ]] && break
+      sleep 0.1
+      ((attempt += 1))
+    done
+    [[ -r $sys_dev ]] ||
+      fail "kernel did not expose partition $partition for $LOOP_DEVICE"
+
+    IFS=: read -r major minor <"$sys_dev"
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] ||
+      fail "invalid device number for ${loop_name}p${partition}"
+    mknod -m 0660 "$node" b "$major" "$minor"
+  done
+}
+
+ensure_loop_device_nodes() {
+  local sys_dev loop_name node major minor found=0
+
+  # A privileged container can see the kernel loop devices through sysfs while
+  # its private /dev occasionally lacks the matching nodes. Recreate only the
+  # container-private nodes from the kernel-provided major/minor numbers.
+  for sys_dev in /sys/class/block/loop*/dev; do
+    [[ -r $sys_dev ]] || continue
+    found=1
+    loop_name=${sys_dev%/dev}
+    loop_name=${loop_name##*/}
+    node="/dev/$loop_name"
+    [[ -b $node ]] && continue
+    [[ ! -e $node ]] || fail "$node exists but is not a block device"
+    IFS=: read -r major minor <"$sys_dev"
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] ||
+      fail "invalid device number for $loop_name"
+    mknod -m 0660 "$node" b "$major" "$minor"
+  done
+  ((found == 1)) || fail "the kernel exposes no loop devices"
+}
+
+partition_image() {
+  local esp_end
+  esp_end=$((ESP_SIZE_MIB + 1))
+
+  truncate --size "$IMAGE_SIZE" "$RAW_TEMP"
+  parted --script "$RAW_TEMP" \
+    mklabel gpt \
+    mkpart ESP fat32 1MiB "${esp_end}MiB" \
+    set 1 esp on \
+    mkpart root btrfs "${esp_end}MiB" 100%
+
+  ensure_loop_device_nodes
+  LOOP_DEVICE=$(losetup --find --show --partscan "$RAW_TEMP")
+  udevadm settle
+  ensure_loop_partition_nodes
+  [[ -b ${LOOP_DEVICE}p1 && -b ${LOOP_DEVICE}p2 ]] ||
+    fail "loop partitions did not appear for $LOOP_DEVICE"
+
+  mkfs.fat -F 32 -n "$ESP_LABEL" "${LOOP_DEVICE}p1"
+  mkfs.btrfs -f -L "$ROOT_LABEL" "${LOOP_DEVICE}p2"
+}
+
+mount_layout() {
+  local top boot_stage
+  MOUNT_DIR=$(mktemp -d /tmp/omarchy-aarch64-image.XXXXXX)
+  top="$MOUNT_DIR.top"
+  boot_stage="$MOUNT_DIR.boot"
+  mkdir -p "$top" "$boot_stage"
+
+  mount "${LOOP_DEVICE}p2" "$top"
+  for subvolume in @ @home @log @pkg; do
+    btrfs subvolume create "$top/$subvolume"
+  done
+  umount "$top"
+  rmdir "$top"
+
+  mount -o noatime,compress=zstd:3,subvol=@ "${LOOP_DEVICE}p2" "$MOUNT_DIR"
+  mkdir -p "$MOUNT_DIR/home" "$MOUNT_DIR/var/log" "$MOUNT_DIR/var/cache/pacman/pkg"
+  mount -o noatime,compress=zstd:3,subvol=@home "${LOOP_DEVICE}p2" "$MOUNT_DIR/home"
+  mount -o noatime,compress=zstd:3,subvol=@log "${LOOP_DEVICE}p2" "$MOUNT_DIR/var/log"
+  mount -o noatime,compress=zstd:3,subvol=@pkg "${LOOP_DEVICE}p2" "$MOUNT_DIR/var/cache/pacman/pkg"
+
+  log "Extracting Arch Linux ARM root filesystem"
+  bsdtar --numeric-owner --acls --xattrs -xpf "$ROOTFS_PATH" -C "$MOUNT_DIR"
+
+  if [[ -d $MOUNT_DIR/boot ]]; then
+    cp -a "$MOUNT_DIR/boot/." "$boot_stage/"
+    find "$MOUNT_DIR/boot" -mindepth 1 -delete
+  else
+    mkdir -p "$MOUNT_DIR/boot"
+  fi
+  mount "${LOOP_DEVICE}p1" "$MOUNT_DIR/boot"
+  cp -a "$boot_stage/." "$MOUNT_DIR/boot/"
+  rm -rf -- "$boot_stage"
+}
+
+write_fstab() {
+  local root_uuid esp_uuid
+  root_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p2")
+  esp_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p1")
+  [[ -n $root_uuid && -n $esp_uuid ]] || fail "failed to read filesystem UUIDs"
+
+  cat >"$MOUNT_DIR/etc/fstab" <<EOF
+UUID=$root_uuid  /                  btrfs  rw,noatime,compress=zstd:3,subvol=@          0 0
+UUID=$root_uuid  /home             btrfs  rw,noatime,compress=zstd:3,subvol=@home      0 0
+UUID=$root_uuid  /var/log          btrfs  rw,noatime,compress=zstd:3,subvol=@log       0 0
+UUID=$root_uuid  /var/cache/pacman/pkg btrfs rw,noatime,compress=zstd:3,subvol=@pkg    0 0
+UUID=$esp_uuid   /boot              vfat   rw,umask=0077                               0 2
+EOF
+}
+
+mount_chroot_filesystems() {
+  local name
+  rm -f "$MOUNT_DIR/etc/resolv.conf"
+  install -m644 /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf"
+
+  for name in dev proc sys; do
+    mkdir -p "$MOUNT_DIR/$name"
+    mount --rbind "/$name" "$MOUNT_DIR/$name"
+    mount --make-rslave "$MOUNT_DIR/$name"
+  done
+  mkdir -p "$MOUNT_DIR/run"
+  mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$MOUNT_DIR/run"
+}
+
+target_chroot() {
+  chroot "$MOUNT_DIR" /usr/bin/env -i \
+    HOME=/root \
+    LANG=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/bin \
+    TERM="${TERM:-linux}" \
+    "$@"
+}
+
+is_devnull_symlink() {
+  [[ -L $1 && $(readlink -- "$1") == /dev/null ]]
+}
+
+mask_target_boot_hooks() {
+  local name path backup
+  local hooks_dir="$MOUNT_DIR/etc/pacman.d/hooks"
+
+  install -d -m755 "$hooks_dir"
+  for name in "$@"; do
+    path="$hooks_dir/$name"
+    backup="$path.omarchy-image-backup"
+    [[ ! -e $backup && ! -L $backup ]] ||
+      fail "boot hook backup already exists: $backup"
+    if [[ -e $path || -L $path ]]; then
+      mv -- "$path" "$backup"
+    fi
+    ln -s /dev/null "$path"
+  done
+}
+
+unmask_target_boot_hooks() {
+  local name path backup
+  local hooks_dir="$MOUNT_DIR/etc/pacman.d/hooks"
+
+  for name in "$@"; do
+    path="$hooks_dir/$name"
+    backup="$path.omarchy-image-backup"
+    is_devnull_symlink "$path" ||
+      fail "boot hook mask was replaced unexpectedly: $path"
+    rm -f -- "$path"
+    if [[ -e $backup || -L $backup ]]; then
+      mv -- "$backup" "$path"
+    fi
+  done
+}
+
+assert_target_boot_hooks_restored() {
+  local name path backup
+  local hooks_dir="$MOUNT_DIR/etc/pacman.d/hooks"
+
+  for name in "${DEFERRED_BOOT_HOOKS[@]}"; do
+    path="$hooks_dir/$name"
+    backup="$path.omarchy-image-backup"
+    ! is_devnull_symlink "$path" || fail "boot hook remains masked: $path"
+    [[ ! -e $backup && ! -L $backup ]] || fail "boot hook backup remains: $backup"
+  done
+  [[ -f $hooks_dir/90-mkinitcpio-install.hook ]] ||
+    fail "future kernel updates have no mkinitcpio install hook"
+}
+
+mount_package_cache() {
+  mkdir -p "$PACMAN_CACHE_DIR" "$MOUNT_DIR/var/cache/pacman/pkg"
+  mount --bind "$PACMAN_CACHE_DIR" "$MOUNT_DIR/var/cache/pacman/pkg"
+  PACKAGE_CACHE_MOUNTED=1
+}
+
+unmount_package_cache() {
+  ((PACKAGE_CACHE_MOUNTED == 1)) || return 0
+  umount "$MOUNT_DIR/var/cache/pacman/pkg"
+  PACKAGE_CACHE_MOUNTED=0
+}
+
+retry_target_pacman() {
+  local attempt
+
+  for attempt in 1 2 3; do
+    if target_chroot pacman "$@"; then
+      return 0
+    fi
+    ((attempt < 3)) || fail "pacman failed after 3 attempts"
+    warn "pacman attempt $attempt failed; retrying with the persistent package cache"
+  done
+}
+
+configure_package_manager() {
+  install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/pacman-aarch64.conf" "$MOUNT_DIR/etc/pacman.conf"
+  install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/mirrorlist-aarch64" "$MOUNT_DIR/etc/pacman.d/mirrorlist"
+  target_chroot pacman-key --init
+  if [[ -f $MOUNT_DIR/usr/share/pacman/keyrings/archlinux.gpg ]]; then
+    target_chroot pacman-key --populate archlinux
+  fi
+  target_chroot pacman-key --populate archlinuxarm
+}
+
+install_packages() {
+  local package package_file package_name boot_hook_package=""
+  local -a official_packages=() local_packages=()
+
+  mapfile -t official_packages < <(resolve_official_packages)
+  ((${#official_packages[@]} > 0)) || fail "resolved official package set is empty"
+  mount_package_cache
+  log "Installing ${#official_packages[@]} Arch Linux ARM packages"
+  retry_target_pacman -Syu --needed --noconfirm "${official_packages[@]}"
+
+  mkdir -p "$MOUNT_DIR/opt/omarchy-packages"
+  while IFS= read -r -d '' package_file; do
+    package_name=$(pacman -Qp "$package_file" | awk '{print $1; exit}') ||
+      fail "cannot inspect package artifact: $package_file"
+    package=${package_file##*/}
+    install -m644 "$package_file" "$MOUNT_DIR/opt/omarchy-packages/$package"
+    if [[ $package_name == limine-mkinitcpio-hook ]]; then
+      boot_hook_package="/opt/omarchy-packages/$package"
+    else
+      local_packages+=("/opt/omarchy-packages/$package")
+    fi
+  done < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' ! -name '*.sig' -print0)
+
+  [[ -n $boot_hook_package ]] || fail "limine-mkinitcpio-hook artifact was not selected"
+  log "Installing the Limine mkinitcpio hook before the remaining local packages"
+  mask_target_boot_hooks "${LIMINE_INSTALL_HOOKS[@]}"
+  retry_target_pacman -U --needed --noconfirm "$boot_hook_package"
+  unmask_target_boot_hooks "${LIMINE_INSTALL_HOOKS[@]}"
+
+  if ((${#local_packages[@]} > 0)); then
+    log "Installing ${#local_packages[@]} source-built package artifacts"
+    mask_target_boot_hooks "${DEFERRED_BOOT_HOOKS[@]}"
+    retry_target_pacman -U --needed --noconfirm "${local_packages[@]}"
+    unmask_target_boot_hooks "${DEFERRED_BOOT_HOOKS[@]}"
+  fi
+  rm -rf -- "$MOUNT_DIR/opt/omarchy-packages"
+  unmount_package_cache
+}
+
+configure_base_system() {
+  local locale_file="$MOUNT_DIR/etc/locale.gen"
+
+  if grep -q '^#en_US.UTF-8 UTF-8' "$locale_file"; then
+    sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$locale_file"
+  elif ! grep -q '^en_US.UTF-8 UTF-8' "$locale_file"; then
+    printf 'en_US.UTF-8 UTF-8\n' >>"$locale_file"
+  fi
+  printf 'LANG=en_US.UTF-8\n' >"$MOUNT_DIR/etc/locale.conf"
+  printf 'KEYMAP=us\n' >"$MOUNT_DIR/etc/vconsole.conf"
+  printf 'omarchy\n' >"$MOUNT_DIR/etc/hostname"
+  ln -sfn /usr/share/zoneinfo/UTC "$MOUNT_DIR/etc/localtime"
+  target_chroot locale-gen
+
+  install -d -m755 "$MOUNT_DIR/etc/mkinitcpio.conf.d"
+  cat >"$MOUNT_DIR/etc/mkinitcpio.conf.d/99-omarchy-aarch64-virt.conf" <<'EOF'
+MODULES+=(virtio? virtio_pci? virtio_mmio? virtio_blk? virtio_scsi? virtio_net? virtio_gpu? virtio_rng?)
+EOF
+
+  # The project tree is commonly bind-mounted from an unprivileged host user.
+  # Preserve the overlay's modes, links, timestamps, ACLs, and xattrs, but do
+  # not leak that host UID/GID into trusted target paths such as /, /etc, and
+  # /usr. Since image assembly runs as root, copied overlay entries become
+  # root-owned while the existing rootfs ownership remains intact.
+  cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
+  apply_profile_shell_defaults
+  chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
+  install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
+  printf '%s\n' "$IMAGE_PROFILE" >"$MOUNT_DIR/etc/omarchy-aarch64/profile"
+  read_list "$PROFILE_DIR/excluded-packages" \
+    >"$MOUNT_DIR/etc/omarchy-aarch64/excluded-packages"
+  read_list "$CONFIG_DIR/source-packages.aarch64" \
+    >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
+  target_chroot systemctl enable omarchy-aarch64-grow-root.service
+}
+
+apply_profile_shell_defaults() {
+  local defaults="$MOUNT_DIR/etc/skel/.config/omarchy/shell.json"
+  local filter="$PROFILE_DIR/shell-defaults.jq"
+  local staged="$defaults.profile"
+
+  [[ -f $defaults ]] || fail "Omarchy shell defaults are missing from /etc/skel"
+  if ! jq --exit-status -f "$filter" "$defaults" >"$staged"; then
+    rm -f -- "$staged"
+    fail "failed to apply $IMAGE_PROFILE shell defaults"
+  fi
+  install -m644 "$staged" "$defaults"
+  rm -f -- "$staged"
+}
+
+apply_omarchy_system() {
+  local status=0
+
+  log "Applying target-side Omarchy system setup"
+  mask_target_boot_hooks "${INITRAMFS_INSTALL_HOOKS[@]}"
+  target_chroot env \
+    OMARCHY_PATH=/usr/share/omarchy \
+    OMARCHY_INSTALL=/usr/share/omarchy/install \
+    OMARCHY_HARDWARE_PROFILE="$IMAGE_PROFILE" \
+    OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log \
+    OMARCHY_LOG_TO_STDOUT=1 \
+    /usr/bin/omarchy-apply-system --defer-provisioning --first-install || status=$?
+  unmask_target_boot_hooks "${INITRAMFS_INSTALL_HOOKS[@]}"
+  ((status == 0)) || fail "target-side Omarchy system setup failed (exit $status)"
+}
+
+stage_first_boot_provisioning() {
+  local provisioning="$MOUNT_DIR/var/lib/omarchy/provisioning"
+  local unit_source="$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
+  local unit_target="$MOUNT_DIR/etc/systemd/system/omarchy-provision-owner.service"
+  local wants="$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
+
+  [[ -x $MOUNT_DIR/usr/bin/omarchy-provision-owner ]] ||
+    fail "the fork package does not contain omarchy-provision-owner"
+  [[ -f $unit_source ]] || fail "the fork package does not contain the provisioning unit"
+
+  install -d -m755 "$provisioning/packages" "$wants"
+  install -m644 "$NODE_TARBALL" "$provisioning/packages/${NODE_TARBALL##*/}"
+  install -m644 "$unit_source" "$unit_target"
+  touch "$provisioning/pending"
+  ln -sfn /etc/systemd/system/omarchy-provision-owner.service \
+    "$wants/omarchy-provision-owner.service"
+}
+
+configure_limine() {
+  local root_uuid cmdline initramfs_output mkinitcpio_status=0
+  root_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p2")
+  cmdline="root=UUID=$root_uuid rw rootflags=subvol=@ rootwait console=tty1 console=ttyAMA0,115200"
+
+  install -d -m755 "$MOUNT_DIR/etc/default"
+  install -m644 "$MOUNT_DIR/usr/share/omarchy/default/limine/default.conf" \
+    "$MOUNT_DIR/etc/default/limine"
+  sed -i "s|@@CMDLINE@@|$cmdline|" "$MOUNT_DIR/etc/default/limine"
+  install -m644 "$MOUNT_DIR/usr/share/omarchy/default/limine/limine.conf" \
+    "$MOUNT_DIR/boot/limine.conf"
+
+  assert_target_boot_hooks_restored
+  log "Selecting the Omarchy Plymouth theme"
+  target_chroot plymouth-set-default-theme omarchy
+  # Unlike Omarchy's x86_64 UKI path, the native AArch64 kernel-entry path
+  # does not make limine-update rebuild initramfs. Do it explicitly after all
+  # package, profile, and system-setup changes so Plymouth and the final
+  # mkinitcpio drop-ins are guaranteed to be embedded.
+  log "Building the final AArch64 initramfs"
+  initramfs_output=$(target_chroot mkinitcpio -P 2>&1) || mkinitcpio_status=$?
+  printf '%s\n' "$initramfs_output"
+  ((mkinitcpio_status == 0)) || fail "the final AArch64 initramfs build failed"
+  if grep -q '^==> ERROR:' <<<"$initramfs_output"; then
+    fail "the final AArch64 initramfs reported an error despite exiting successfully"
+  fi
+  log "Building the complete Omarchy AArch64 Limine boot stack"
+  target_chroot env LIMINE_FORCE_UEFI=yes limine-update
+  target_chroot btrfs quota disable / >/dev/null 2>&1 ||
+    warn "could not disable Btrfs quotas after the final Limine build"
+}
+
+validate_remove_package_patterns() {
+  local pattern status
+
+  while IFS= read -r pattern; do
+    grep -E -- "$pattern" </dev/null >/dev/null 2>&1 || {
+      status=$?
+      ((status == 1)) || fail "invalid package removal pattern in $IMAGE_PROFILE: $pattern"
+    }
+  done < <(read_list "$PROFILE_DIR/remove-package-patterns")
+}
+
+resolve_profile_removed_packages() {
+  local package pattern
+
+  while IFS= read -r package; do
+    while IFS= read -r pattern; do
+      if [[ $package =~ $pattern ]]; then
+        printf '%s\n' "$package"
+        break
+      fi
+    done < <(read_list "$PROFILE_DIR/remove-package-patterns")
+  done < <(target_chroot pacman -Qq)
+}
+
+remove_profile_packages() {
+  local -a packages=()
+
+  mapfile -t packages < <(resolve_profile_removed_packages)
+  if ((${#packages[@]} > 0)); then
+    log "Removing ${#packages[@]} packages excluded by profile $IMAGE_PROFILE"
+    mask_target_boot_hooks "${INITRAMFS_INSTALL_HOOKS[@]}"
+    target_chroot pacman -Rns --noconfirm "${packages[@]}"
+    unmask_target_boot_hooks "${INITRAMFS_INSTALL_HOOKS[@]}"
+  fi
+}
+
+sanitize_factory_identity() {
+  if target_chroot getent passwd alarm >/dev/null 2>&1; then
+    target_chroot userdel --remove alarm
+  fi
+  target_chroot passwd --lock root
+  rm -f "$MOUNT_DIR/etc/ssh/ssh_host_"*
+  rm -f "$MOUNT_DIR/var/lib/systemd/random-seed"
+  : >"$MOUNT_DIR/etc/machine-id"
+  ln -sfn /run/systemd/resolve/stub-resolv.conf "$MOUNT_DIR/etc/resolv.conf"
+  rm -rf -- "$MOUNT_DIR/root/.gnupg" "$MOUNT_DIR/root/.cache"
+  target_chroot pacman -Scc --noconfirm
+}
+
+write_image_provenance() {
+  local destination="$MOUNT_DIR/usr/share/omarchy-aarch64/image-build.txt"
+  install -d -m755 "${destination%/*}"
+  {
+    printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'rootfs_url=%s\n' "$ROOTFS_URL"
+    printf 'rootfs_sha256=%s\n' "$(sha256sum "$ROOTFS_PATH" | awk '{print $1}')"
+    printf 'node_archive=%s\n' "${NODE_TARBALL##*/}"
+    printf 'node_sha256=%s\n' "$(sha256sum "$NODE_TARBALL" | awk '{print $1}')"
+    printf 'omarchy_source=%s\n' "$OMARCHY_SOURCE_COMMIT"
+    printf 'omarchy_source_url=%s\n' "$OMARCHY_AARCH64_URL"
+    printf 'omarchy_source_ref=%s\n' "$OMARCHY_AARCH64_REF"
+    printf 'omarchy_source_kind=%s\n' "$OMARCHY_SOURCE_KIND"
+    printf 'omarchy_source_dirty=%s\n' "$OMARCHY_SOURCE_DIRTY"
+    printf 'omarchy_pkgs_source=%s\n' "$OMARCHY_PKGS_REF"
+    if [[ -f $PACKAGE_DIR/provenance.txt ]]; then
+      printf 'package_provenance_sha256=%s\n' "$(sha256sum "$PACKAGE_DIR/provenance.txt" | awk '{print $1}')"
+    fi
+    printf 'image_profile=%s\n' "$IMAGE_PROFILE"
+    printf 'image_format=%s\n' "$IMAGE_FORMAT"
+    printf 'image_size=%s\n' "$IMAGE_SIZE"
+  } >"$destination"
+  if [[ -f $PACKAGE_DIR/provenance.txt ]]; then
+    install -m644 "$PACKAGE_DIR/provenance.txt" \
+      "$MOUNT_DIR/usr/share/omarchy-aarch64/package-build.txt"
+  fi
+  install -m644 "$destination" "$BUILD_DIR/image-provenance.txt"
+}
+
+validate_target() {
+  local owner required initramfs_listing
+  local -a installed_exclusions=()
+  local -a removed_packages=()
+  local -a root_owned_paths=(
+    .
+    etc
+    etc/systemd
+    etc/systemd/system
+    usr
+    usr/lib
+  )
+  local -a required_paths=(
+    boot/EFI/BOOT/BOOTAA64.EFI
+    boot/EFI/limine/limine_aa64.efi
+    boot/limine.conf
+    etc/default/limine
+    etc/fstab
+    etc/limine-entry-tool.d/99-aarch64-virt.conf
+    etc/limine-entry-tool.d/omarchy-defaults.conf
+    etc/mkinitcpio.conf.d/omarchy_hooks.conf
+    etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
+    etc/omarchy-aarch64/excluded-packages
+    etc/omarchy-aarch64/profile
+    etc/plymouth/plymouthd.conf
+    etc/snapper/configs/root
+    etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
+    etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
+    usr/bin/omarchy-provision-owner
+    usr/bin/limine-mkinitcpio
+    usr/bin/limine-snapper-sync
+    usr/bin/spice-guest-tools
+    usr/lib/systemd/user/graphical-session.target.wants/spice-guest-tools-bootstrap.service
+    usr/lib/systemd/user/spice-clipboard-bridge.service
+    usr/lib/systemd/user/spice-display-bridge.service
+    usr/share/omarchy/version
+    usr/share/plymouth/themes/omarchy/omarchy.plymouth
+    var/lib/omarchy/provisioning/pending
+  )
+
+  for required in "${required_paths[@]}"; do
+    [[ -e $MOUNT_DIR/$required || -L $MOUNT_DIR/$required ]] ||
+      fail "target validation failed: /$required is missing"
+  done
+  for required in "${root_owned_paths[@]}"; do
+    owner=$(stat -c '%u:%g' "$MOUNT_DIR/$required")
+    [[ $owner == 0:0 ]] ||
+      fail "target validation failed: /${required#.} is owned by $owner instead of 0:0"
+  done
+  [[ -f $MOUNT_DIR/boot/Image ]] ||
+    fail "target validation failed: Arch Linux ARM kernel is missing"
+  [[ -f $MOUNT_DIR/boot/initramfs-linux.img ]] ||
+    fail "target validation failed: Arch Linux ARM initramfs is missing"
+  grep -q 'path: boot():/Image' "$MOUNT_DIR/boot/limine.conf" ||
+    fail "target validation failed: Limine does not reference the Arch Linux ARM kernel"
+  grep -q 'rootflags=subvol=@' "$MOUNT_DIR/boot/limine.conf" ||
+    fail "target validation failed: Limine entry lacks the Btrfs root subvolume"
+  if ! grep -Eq '(^|[[:space:]])quiet([[:space:]]|$)' "$MOUNT_DIR/boot/limine.conf" ||
+    ! grep -Eq '(^|[[:space:]])splash([[:space:]]|$)' "$MOUNT_DIR/boot/limine.conf"; then
+    fail "target validation failed: Limine entry does not enable the Omarchy boot splash"
+  fi
+  grep -q '^Theme=omarchy$' "$MOUNT_DIR/etc/plymouth/plymouthd.conf" ||
+    fail "target validation failed: the Omarchy Plymouth theme is not selected"
+  grep -q 'plymouth' "$MOUNT_DIR/etc/mkinitcpio.conf.d/omarchy_hooks.conf" ||
+    fail "target validation failed: the Omarchy mkinitcpio hooks omit Plymouth"
+  assert_target_boot_hooks_restored
+  initramfs_listing=$(target_chroot lsinitcpio /boot/initramfs-linux.img) ||
+    fail "target validation failed: cannot inspect the generated initramfs"
+  grep -Fq 'usr/bin/plymouthd' <<<"$initramfs_listing" ||
+    fail "target validation failed: Plymouth is missing from the generated initramfs"
+  grep -Fq 'usr/share/plymouth/themes/omarchy/omarchy.plymouth' <<<"$initramfs_listing" ||
+    fail "target validation failed: the Omarchy theme is missing from the generated initramfs"
+  grep -q '^\[alarm\]$' "$MOUNT_DIR/etc/pacman.conf" ||
+    fail "target validation failed: pacman is not configured for Arch Linux ARM"
+  if grep -q '^\[omarchy\]$\|^\[multilib\]$' "$MOUNT_DIR/etc/pacman.conf"; then
+    fail "target validation failed: an x86/custom binary repository remains enabled"
+  fi
+  target_chroot pacman -Q omarchy omarchy-settings omarchy-spice-guest-tools \
+    limine limine-mkinitcpio-hook limine-snapper-sync plymouth snapper \
+    gst-plugin-pipewire pipewire pipewire-alsa \
+    pipewire-audio pipewire-jack pipewire-pulse wireplumber >/dev/null
+  mapfile -t installed_exclusions < <(
+    comm -12 \
+      <(read_list "$PROFILE_DIR/excluded-packages" | sort -u) \
+      <(target_chroot pacman -Qq | sort -u)
+  )
+  ((${#installed_exclusions[@]} == 0)) ||
+    fail "target validation failed: profile-excluded packages are installed: ${installed_exclusions[*]}"
+  mapfile -t removed_packages < <(resolve_profile_removed_packages)
+  ((${#removed_packages[@]} == 0)) ||
+    fail "target validation failed: profile-excluded packages remain installed: ${removed_packages[*]}"
+  [[ $(<"$MOUNT_DIR/etc/omarchy-aarch64/profile") == "$IMAGE_PROFILE" ]] ||
+    fail "target validation failed: image profile marker is incorrect"
+  jq --exit-status '
+    ([.bar.layout.left[], .bar.layout.center[], .bar.layout.right[]]
+      | map(select(.id == "omarchy.indicators"))[0].items)
+      == ["Dictation", "Reminder", "Dnd", "StayAwake"]
+    and (.disabledPlugins | index("omarchy.nightlight") != null)
+  ' "$MOUNT_DIR/etc/skel/.config/omarchy/shell.json" >/dev/null ||
+    fail "target validation failed: virtual-only shell indicators remain enabled"
+  target_chroot getent passwd alarm >/dev/null 2>&1 &&
+    fail "target validation failed: the default alarm account still exists"
+  [[ ! -s $MOUNT_DIR/etc/machine-id ]] ||
+    fail "target validation failed: machine-id was not cleared"
+}
+
+manifest_output_base() {
+  case $OUTPUT_PATH in
+    *.qcow2) printf '%s' "${OUTPUT_PATH%.qcow2}" ;;
+    *.raw) printf '%s' "${OUTPUT_PATH%.raw}" ;;
+    *) printf '%s' "$OUTPUT_PATH" ;;
+  esac
+}
+
+stage_package_manifests() {
+  local orphan_status=0
+
+  MANIFEST_STAGE_DIR=$(mktemp -d "$BUILD_DIR/.omarchy-aarch64-manifests.XXXXXX")
+  target_chroot pacman -Qq | LC_ALL=C sort \
+    >"$MANIFEST_STAGE_DIR/all-packages.txt"
+  target_chroot pacman -Qqe | LC_ALL=C sort \
+    >"$MANIFEST_STAGE_DIR/explicit-packages.txt"
+  target_chroot expac -Q $'%n\t%m\t%D\t%R\t%d' | LC_ALL=C sort \
+    >"$MANIFEST_STAGE_DIR/packages.tsv"
+  target_chroot pacman -Qdtq >"$MANIFEST_STAGE_DIR/orphans.txt" 2>/dev/null ||
+    orphan_status=$?
+  ((orphan_status <= 1)) || fail "could not inventory orphaned target packages"
+  LC_ALL=C sort -o "$MANIFEST_STAGE_DIR/orphans.txt" \
+    "$MANIFEST_STAGE_DIR/orphans.txt"
+}
+
+publish_package_manifests() {
+  local name output_base
+  output_base=$(manifest_output_base)
+
+  [[ $MANIFEST_STAGE_DIR == "$BUILD_DIR"/.omarchy-aarch64-manifests.* &&
+    -d $MANIFEST_STAGE_DIR ]] || fail "package manifest staging directory is missing"
+  for name in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
+    mv -f -- "$MANIFEST_STAGE_DIR/$name" "$output_base.$name"
+  done
+  rmdir -- "$MANIFEST_STAGE_DIR"
+  MANIFEST_STAGE_DIR=""
+}
+
+target_process_ids() {
+  local process_dir process_root process_cwd
+
+  for process_dir in /proc/[0-9]*; do
+    [[ -d $process_dir ]] || continue
+    process_root=$(readlink -f "$process_dir/root" 2>/dev/null) || continue
+    process_cwd=$(readlink -f "$process_dir/cwd" 2>/dev/null || true)
+    if [[ $process_root == "$MOUNT_DIR" || $process_cwd == "$MOUNT_DIR" ||
+      $process_cwd == "$MOUNT_DIR/"* ]]; then
+      printf '%s\n' "${process_dir##*/}"
+    fi
+  done
+}
+
+stop_target_background_helpers() {
+  local attempt pid process_name
+  local -a target_pids=()
+
+  # pacman-key starts a long-lived gpg-agent inside the chroot. If it is left
+  # running, its open /dev handles keep the private chroot bind mount busy and
+  # prevent a clean image detach. Shut down both homes used during assembly.
+  target_chroot gpgconf --homedir /etc/pacman.d/gnupg --kill all >/dev/null 2>&1 || true
+  target_chroot gpgconf --kill all >/dev/null 2>&1 || true
+
+  # Package hooks may leave other helpers alive. Only stop processes whose
+  # root or working directory is inside this disposable target filesystem.
+  mapfile -t target_pids < <(target_process_ids)
+  if ((${#target_pids[@]} > 0)); then
+    for pid in "${target_pids[@]}"; do
+      IFS= read -r process_name <"/proc/$pid/comm" 2>/dev/null || process_name=unknown
+      warn "stopping target helper before image detach: $pid ($process_name)"
+      kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    for attempt in {1..20}; do
+      mapfile -t target_pids < <(target_process_ids)
+      ((${#target_pids[@]} == 0)) && return 0
+      sleep 0.1
+    done
+
+    for pid in "${target_pids[@]}"; do
+      warn "forcing target helper to stop before image detach: $pid"
+      kill -KILL "$pid" 2>/dev/null || true
+    done
+  fi
+}
+
+create_factory_snapshot() {
+  local top="$MOUNT_DIR.factory"
+  mkdir -p "$top"
+  mount -o subvolid=5 "${LOOP_DEVICE}p2" "$top"
+  [[ -d $top/@ ]] || fail "cannot find the @ subvolume for the factory snapshot"
+  [[ ! -e $top/@factory ]] || fail "@factory already exists"
+  btrfs subvolume snapshot "$top/@" "$top/@factory"
+  btrfs property set -ts "$top/@factory" ro true
+  umount "$top"
+  rmdir "$top"
+}
+
+detach_image() {
+  sync
+  fstrim "$MOUNT_DIR" >/dev/null 2>&1 || true
+  umount -R "$MOUNT_DIR"
+  losetup -d "$LOOP_DEVICE"
+  LOOP_DEVICE=""
+  rmdir "$MOUNT_DIR"
+  MOUNT_DIR=""
+}
+
+finalize_image_artifact() {
+  local staged=$1 destination=$2 checksum_file checksum_temp digest
+  checksum_file="$destination.sha256"
+  checksum_temp="$checksum_file.part"
+
+  digest=$(sha256sum "$staged" | awk '{print $1}')
+  printf '%s  %s\n' "$digest" "${destination##*/}" >"$checksum_temp"
+  # Never leave an old checksum beside a newly renamed image if the process is
+  # interrupted between these two atomic replacements.
+  rm -f -- "$checksum_file"
+  mv -f -- "$staged" "$destination"
+  mv -f -- "$checksum_temp" "$checksum_file"
+}
+
+emit_images() {
+  local qcow_temp raw_output raw_temp
+  raw_output=$(raw_output_path)
+  qcow_temp="$OUTPUT_PATH.part"
+  raw_temp="$raw_output.part"
+
+  case $IMAGE_FORMAT in
+    qcow2)
+      log "Converting sparse raw disk to compressed QCOW2"
+      qemu-img convert -p -c -f raw -O qcow2 "$RAW_TEMP" "$qcow_temp"
+      finalize_image_artifact "$qcow_temp" "$OUTPUT_PATH"
+      ;;
+    raw)
+      cp --sparse=always "$RAW_TEMP" "$raw_temp"
+      finalize_image_artifact "$raw_temp" "$OUTPUT_PATH"
+      ;;
+    both)
+      cp --sparse=always "$RAW_TEMP" "$raw_temp"
+      log "Converting sparse raw disk to compressed QCOW2"
+      qemu-img convert -p -c -f raw -O qcow2 "$RAW_TEMP" "$qcow_temp"
+      finalize_image_artifact "$raw_temp" "$raw_output"
+      finalize_image_artifact "$qcow_temp" "$OUTPUT_PATH"
+      ;;
+  esac
+}
+
+main() {
+  local command
+
+  select_profile "$@"
+  parse_args "$@"
+  if [[ $IMAGE_FORMAT == raw && $OUTPUT_PATH == "$PROJECT_ROOT/$IMAGE_OUTPUT" && $OUTPUT_PATH == *.qcow2 ]]; then
+    OUTPUT_PATH="${OUTPUT_PATH%.qcow2}.raw"
+  fi
+  for command in awk blkid bsdtar btrfs chroot curl findmnt gpg gpgv jq losetup mkfs.btrfs \
+    mkfs.fat mknod mount numfmt pacman parted readlink realpath sha256sum stat truncate udevadm umount git; do
+    require_command "$command"
+  done
+  resolve_omarchy_source
+  validate_configuration
+  validate_outputs
+  verify_source_packages
+  validate_package_provenance
+
+  mkdir -p "$CACHE_DIR"
+  resolve_keyring
+  prepare_verification_keyring
+  resolve_rootfs
+  verify_rootfs
+  resolve_node_tarball
+
+  RAW_TEMP=$(mktemp "$BUILD_DIR/.omarchy-aarch64.XXXXXX.raw")
+  trap cleanup EXIT
+
+  log "Creating $IMAGE_SIZE GPT disk image"
+  partition_image
+  mount_layout
+  write_fstab
+  mount_chroot_filesystems
+  configure_package_manager
+  install_packages
+  configure_base_system
+  apply_omarchy_system
+  stage_first_boot_provisioning
+  remove_profile_packages
+  configure_limine
+  sanitize_factory_identity
+  write_image_provenance
+  validate_target
+  stage_package_manifests
+  stop_target_background_helpers
+  create_factory_snapshot
+  detach_image
+  emit_images
+  publish_package_manifests
+
+  BUILD_COMPLETE=1
+  rm -f -- "$RAW_TEMP"
+  RAW_TEMP=""
+  log "Image build complete: $OUTPUT_PATH"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

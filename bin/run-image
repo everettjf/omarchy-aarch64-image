@@ -1,0 +1,121 @@
+#!/bin/bash
+
+set -euo pipefail
+
+memory=8192
+cpus=8
+firmware="${QEMU_EFI:-}"
+ssh_port=2222
+image_path=""
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./bin/run-image [options] IMAGE
+
+Options:
+  --memory MIB       Guest memory in MiB (default: 8192)
+  --cpus COUNT       Virtual CPU count (default: 8)
+  --firmware PATH    AArch64 EDK2/QEMU EFI firmware
+  --ssh-port PORT    Host port forwarded to guest port 22 (default: 2222)
+  -h, --help         Show this help
+EOF
+}
+
+while (($#)); do
+  case $1 in
+    --memory)
+      (($# >= 2)) || fail "--memory requires a value"
+      memory=$2
+      shift 2
+      ;;
+    --cpus)
+      (($# >= 2)) || fail "--cpus requires a value"
+      cpus=$2
+      shift 2
+      ;;
+    --firmware)
+      (($# >= 2)) || fail "--firmware requires a path"
+      firmware=$2
+      shift 2
+      ;;
+    --ssh-port)
+      (($# >= 2)) || fail "--ssh-port requires a value"
+      ssh_port=$2
+      shift 2
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*)
+      fail "unknown option: $1"
+      ;;
+    *)
+      [[ -z $image_path ]] || fail "only one image may be supplied"
+      image_path=$1
+      shift
+      ;;
+  esac
+done
+
+command -v qemu-system-aarch64 >/dev/null 2>&1 ||
+  fail "qemu-system-aarch64 is not installed"
+command -v qemu-img >/dev/null 2>&1 || fail "qemu-img is not installed"
+[[ -n $image_path ]] || { usage >&2; fail "IMAGE is required"; }
+image_path=$(realpath "$image_path")
+[[ -f $image_path ]] || fail "image not found: $image_path"
+[[ $memory =~ ^[0-9]+$ && $memory -ge 2048 ]] || fail "memory must be at least 2048 MiB"
+[[ $cpus =~ ^[0-9]+$ && $cpus -ge 1 ]] || fail "cpus must be a positive integer"
+[[ $ssh_port =~ ^[0-9]+$ && $ssh_port -ge 1 && $ssh_port -le 65535 ]] ||
+  fail "ssh port must be between 1 and 65535"
+
+if [[ -z $firmware ]]; then
+  for candidate in \
+    /usr/share/edk2/aarch64/QEMU_EFI.fd \
+    /usr/share/edk2-armvirt/aarch64/QEMU_EFI.fd \
+    /usr/share/AAVMF/AAVMF_CODE.fd \
+    /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
+    if [[ -f $candidate ]]; then
+      firmware=$candidate
+      break
+    fi
+  done
+fi
+[[ -f $firmware ]] ||
+  fail "AArch64 UEFI firmware was not found; pass --firmware or set QEMU_EFI"
+
+image_format=$(qemu-img info "$image_path" | awk -F ': ' '/^file format:/ {print $2; exit}')
+[[ $image_format == raw || $image_format == qcow2 ]] ||
+  fail "unsupported or unknown image format: ${image_format:-unknown}"
+
+acceleration=tcg
+cpu=max
+if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
+  acceleration=kvm
+  cpu=host
+fi
+
+exec qemu-system-aarch64 \
+  -name omarchy-aarch64 \
+  -machine virt,gic-version=max \
+  -accel "$acceleration" \
+  -cpu "$cpu" \
+  -smp "$cpus" \
+  -m "$memory" \
+  -bios "$firmware" \
+  -drive "if=none,file=$image_path,format=$image_format,discard=unmap,id=system" \
+  -device virtio-blk-pci,drive=system \
+  -device virtio-gpu-pci \
+  -device qemu-xhci \
+  -device usb-kbd \
+  -device usb-tablet \
+  -device virtio-rng-pci \
+  -netdev "user,id=network,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
+  -device virtio-net-pci,netdev=network \
+  -display gtk \
+  -serial mon:stdio

@@ -1,0 +1,4 @@
+/build/
+*.qcow2
+*.raw
+*.sha256

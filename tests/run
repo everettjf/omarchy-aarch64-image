@@ -1,0 +1,333 @@
+#!/bin/bash
+
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly ROOT
+OMARCHY_TEST_SOURCE=${OMARCHY_TEST_SOURCE:-"$ROOT/../omarchy-aarch64"}
+OMARCHY_TEST_SOURCE=$(realpath -e -- "$OMARCHY_TEST_SOURCE")
+readonly OMARCHY_TEST_SOURCE
+
+[[ -d $OMARCHY_TEST_SOURCE/.git ]] || {
+  echo "FAIL: set OMARCHY_TEST_SOURCE to an omarchy-aarch64 checkout" >&2
+  exit 1
+}
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+pass() {
+  echo "PASS: $*"
+}
+
+while IFS= read -r script; do
+  bash -n "$script" || fail "bash syntax: ${script#$ROOT/}"
+done < <(find "$ROOT/bin" -type f -print; find "$ROOT/profiles" -type f -perm /111 -print)
+bash -n "$OMARCHY_TEST_SOURCE/install/user/mise-work.sh"
+bash -n "$OMARCHY_TEST_SOURCE/install/hardware/all.sh"
+bash -n "$OMARCHY_TEST_SOURCE/install/hardware/virtual-machine.sh"
+bash -n "$OMARCHY_TEST_SOURCE/install/post-install/pacman.sh"
+bash -n "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner"
+pass "all project and modified runtime scripts parse as Bash"
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck "$ROOT"/bin/* "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root"
+  pass "project scripts pass shellcheck"
+fi
+
+(
+  # shellcheck source=../bin/build-image
+  source "$ROOT/bin/build-image"
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+
+  printf '%s\n' keep from-source excluded old >"$fixture/base"
+  printf '%s\n' from-source >"$fixture/source"
+  printf '%s\n' excluded >"$fixture/excluded"
+  printf '%s\n' 'old replacement' >"$fixture/replacements"
+  printf '%s\n' runtime keep >"$fixture/runtime"
+
+  mapfile -t resolved < <(
+    resolve_official_packages \
+      "$fixture/base" "$fixture/source" "$fixture/excluded" \
+      "$fixture/replacements" "$fixture/runtime"
+  )
+  [[ ${resolved[*]} == "keep replacement runtime" ]] ||
+    fail "package resolution produced: ${resolved[*]}"
+  pass "package resolution excludes source/unsupported targets and applies replacements"
+
+  select_profile --profile aarch64-virt
+  [[ $PROFILE_DIR == "$ROOT/profiles/aarch64-virt" ]] || fail "profile directory was not selected"
+  [[ $OUTPUT_PATH == "$ROOT/build/omarchy-aarch64-virt.qcow2" ]] ||
+    fail "profile default output is incorrect: $OUTPUT_PATH"
+  validate_remove_package_patterns
+
+  MODULES=(virtio_blk thunderbolt virtio_gpu)
+  HOOKS=(base udev microcode autodetect plymouth filesystems)
+  # shellcheck source=/dev/null
+  source "$PROFILE_DIR/overlay/etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf"
+  [[ ${MODULES[*]} == "virtio_blk virtio_gpu" ]] ||
+    fail "aarch64-virt mkinitcpio module filter produced: ${MODULES[*]}"
+  [[ ${HOOKS[*]} == "base udev autodetect plymouth filesystems" ]] ||
+    fail "aarch64-virt mkinitcpio hook filter produced: ${HOOKS[*]}"
+
+  MOUNT_DIR="$fixture/target"
+  hook_dir="$MOUNT_DIR/etc/pacman.d/hooks"
+  hook_name=90-mkinitcpio-install.hook
+  mkdir -p "$hook_dir"
+  printf 'original hook\n' >"$hook_dir/$hook_name"
+  mask_target_boot_hooks "$hook_name"
+  is_devnull_symlink "$hook_dir/$hook_name" || fail "boot hook was not masked"
+  [[ -f $hook_dir/$hook_name.omarchy-image-backup ]] ||
+    fail "boot hook was not preserved while masked"
+  unmask_target_boot_hooks "$hook_name"
+  [[ $(<"$hook_dir/$hook_name") == "original hook" ]] ||
+    fail "boot hook was not restored byte-for-byte"
+  assert_target_boot_hooks_restored
+
+  for package in kdenlive libreoffice-fresh moonlight-qt hyprsunset gpu-screen-recorder; do
+    grep -qx "$package" "$PROFILE_DIR/excluded-packages" ||
+      fail "aarch64-virt still installs unsupported/oversized package: $package"
+  done
+  for package in clang llvm docker docker-buildx docker-compose lazydocker mariadb-libs \
+    postgresql-libs python-poetry-core ruby tree-sitter-cli; do
+    if grep -qx "$package" "$PROFILE_DIR/excluded-packages"; then
+      fail "aarch64-virt still excludes an upstream development package: $package"
+    fi
+  done
+  for package in ufw-docker tobi-try; do
+    grep -qx "$package" "$ROOT/config/source-packages.aarch64" ||
+      fail "upstream default local package is not built: $package"
+  done
+  for package in gst-plugin-pipewire pipewire pipewire-alsa pipewire-audio pipewire-jack \
+    pipewire-pulse wireplumber; do
+    grep -qx "$package" "$PROFILE_DIR/runtime-packages" ||
+      fail "aarch64-virt audio stack is missing: $package"
+  done
+
+  shell_defaults=$(jq -f "$PROFILE_DIR/shell-defaults.jq" \
+    "$OMARCHY_TEST_SOURCE/config/omarchy/shell.json")
+  jq -e '
+    ([.bar.layout.left[], .bar.layout.center[], .bar.layout.right[]]
+      | map(select(.id == "omarchy.indicators"))[0].items)
+      == ["Dictation", "Reminder", "Dnd", "StayAwake"]
+    and (.disabledPlugins | index("omarchy.nightlight") != null)
+  ' <<<"$shell_defaults" >/dev/null ||
+    fail "aarch64-virt shell defaults retain Night Light or Screen Recording"
+
+  output_fixture="$fixture/output.qcow2"
+  OUTPUT_PATH="$output_fixture"
+  IMAGE_FORMAT=qcow2
+  FORCE=1
+  : >"$output_fixture"
+  : >"$output_fixture.part"
+  validate_outputs
+  [[ -e $output_fixture ]] || fail "--force discarded the previous image before replacement"
+  [[ ! -e $output_fixture.part ]] || fail "stale image conversion partial was not removed"
+
+  printf 'replacement image\n' >"$output_fixture.part"
+  finalize_image_artifact "$output_fixture.part" "$output_fixture"
+  [[ $(<"$output_fixture") == "replacement image" ]] ||
+    fail "atomic image finalization did not replace the destination"
+  (cd "$fixture" && sha256sum -c output.qcow2.sha256 >/dev/null) ||
+    fail "atomic image finalization published an invalid checksum"
+
+  target_chroot() {
+    printf '%s\n' base dhcpcd ex-vi-compat haveged linux-aarch64 linux-firmware \
+      linux-firmware-amdgpu nano net-tools netctl sof-firmware
+  }
+  mapfile -t removed < <(resolve_profile_removed_packages)
+  [[ ${removed[*]} == "dhcpcd ex-vi-compat haveged linux-firmware linux-firmware-amdgpu nano net-tools netctl sof-firmware" ]] ||
+    fail "profile removal rules selected: ${removed[*]}"
+  pass "aarch64-virt owns its VM desktop, audio stack, shell, and package-removal policy"
+)
+
+comm -12 \
+  <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ROOT/config/source-packages.aarch64" | sort) \
+  <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ROOT/profiles/aarch64-virt/excluded-packages" | sort) |
+  grep -q . && fail "a package is both source-built and excluded"
+pass "AArch64 source and exclusion manifests are disjoint"
+
+(
+  # shellcheck source=../bin/build-packages
+  source "$ROOT/bin/build-packages"
+  validate_prebuilt_manifest
+  mapfile -t source_only < <(resolve_source_packages)
+  [[ " ${source_only[*]} " != *" localsend "* ]] ||
+    fail "checksum-pinned LocalSend would still be rebuilt"
+  [[ " ${source_only[*]} " == *" omarchy "* ]] ||
+    fail "fork-specific Omarchy package is not source-built"
+  [[ " ${source_only[*]} " == *" limine-mkinitcpio-hook "* ]] ||
+    fail "patched Limine hook is not source-built"
+  [[ " ${source_only[*]} " == *" omarchy-spice-guest-tools "* ]] ||
+    fail "Omarchy SPICE guest integration is not source-built"
+  OMARCHY_SOURCE_OVERRIDE=$OMARCHY_TEST_SOURCE
+  resolve_omarchy_source
+  [[ $OMARCHY_SOURCE_KIND == local ]] || fail "explicit source override was not selected"
+  [[ $OMARCHY_SOURCE_COMMIT == "$OMARCHY_AARCH64_REF" ]] ||
+    fail "test source is not the pinned Omarchy AArch64 commit"
+  package_version=$(omarchy_package_version)
+  [[ $package_version == 4.0.1.r*.g"${OMARCHY_AARCH64_REF:0:12}" ]] ||
+    fail "Omarchy package version does not use the 4.0.1 baseline: $package_version"
+  pass "prebuilt inputs and the separate Omarchy 4.0.1 source are pinned"
+)
+
+mapfile -t image_profiles < <(find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+[[ ${image_profiles[*]} == aarch64-virt ]] ||
+  fail "the current release must expose only the aarch64-virt image profile"
+pass "the current release exposes only the aarch64-virt image profile"
+
+grep -Fq 'BOOTAA64.EFI' "$ROOT/packages/limine-mkinitcpio-hook/limine-entry-tool-aarch64.patch" ||
+  fail "Limine patch does not install the AArch64 fallback loader"
+grep -Fq 'LIMINE_FORCE_UEFI' "$ROOT/packages/limine-mkinitcpio-hook/limine-entry-tool-aarch64.patch" ||
+  fail "Limine patch cannot configure an offline UEFI target"
+grep -Fq 'ENABLE_UKI=no' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/limine-entry-tool.d/99-aarch64-virt.conf" ||
+  fail "AArch64 virt does not disable mkinitcpio's x86-64-only UKI mode"
+grep -Fq 'path: boot():/Image' "$OMARCHY_TEST_SOURCE/default/limine/limine.conf" ||
+  fail "Limine does not use Arch Linux ARM's stable kernel path"
+grep -Fq 'module_path: boot():/initramfs-linux.img' \
+  "$OMARCHY_TEST_SOURCE/default/limine/limine.conf" ||
+  fail "Limine does not use Arch Linux ARM's stable initramfs path"
+if rg -n '^[-+]makedepends=.*gradle|gradle-.*bin\.zip' \
+  "$ROOT/patches/omarchy-pkgs-source-build.patch" >/dev/null; then
+  fail "the upstream Limine Gradle dependency was rewritten"
+fi
+grep -Fq 'services.gradle.org/distributions/gradle-' "$ROOT/packages/gradle/PKGBUILD" ||
+  fail "the build-only Gradle bootstrap does not use the official distribution"
+grep -Fq 'acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a' \
+  "$ROOT/packages/gradle/PKGBUILD" ||
+  fail "the Gradle source is not pinned by its official SHA-256 digest"
+grep -q '"skip_build": true' "$ROOT/packages/gradle/package.json" ||
+  fail "the Gradle bootstrap could leak into an unscoped package build"
+if grep -qx gradle "$ROOT/config/source-packages.aarch64"; then
+  fail "the build-only Gradle bootstrap would be copied into image artifacts"
+fi
+pass "Limine packaging carries the AArch64/offline UEFI adaptation"
+
+grep -Fq 'pkgname=omarchy-spice-guest-tools' \
+  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
+  fail "the SPICE guest-tools package recipe is missing"
+grep -Fq '"source": "local"' \
+  "$ROOT/packages/source/omarchy-spice-guest-tools/.omarchy/package.json" ||
+  fail "the SPICE guest-tools recipe is not enabled for local builds"
+grep -Fq 'releases/download/v${pkgver}' \
+  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
+  fail "the SPICE guest-tools recipe does not consume a versioned release"
+grep -Fq "'c2027e9914ff92af59682029188da09fe46cabb232bf036be6be2956f01c2a0e'" \
+  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD" ||
+  fail "the SPICE guest-tools release is not checksum-pinned"
+if grep -Fq 'sockets.target.wants/spice-vdagentd.socket' \
+  "$ROOT/packages/source/omarchy-spice-guest-tools/PKGBUILD"; then
+  fail "the SPICE package bypasses stock virtio-port udev socket activation"
+fi
+grep -Fq 'usr/bin/spice-guest-tools' "$ROOT/bin/build-image" ||
+  fail "the image does not validate the SPICE guest-tools payload"
+pass "aarch64-virt integrates the pinned Omarchy SPICE guest package"
+
+grep -Fq 'plymouth-set-default-theme omarchy' "$ROOT/bin/build-image" ||
+  fail "image assembly does not explicitly select the Omarchy boot theme"
+grep -Fq 'target_chroot mkinitcpio -P' "$ROOT/bin/build-image" ||
+  fail "native AArch64 image assembly does not explicitly rebuild initramfs"
+grep -Fq "grep -q '^==> ERROR:'" "$ROOT/bin/build-image" ||
+  fail "native AArch64 image assembly accepts mkinitcpio's false-success errors"
+grep -Fq '== thunderbolt' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf" ||
+  fail "aarch64-virt still requests the physical Thunderbolt kernel module"
+grep -Fq '== microcode' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf" ||
+  fail "aarch64-virt still requests the x86 microcode mkinitcpio hook"
+grep -Fq 'usr/share/plymouth/themes/omarchy/omarchy.plymouth' "$ROOT/bin/build-image" ||
+  fail "image validation does not require the Omarchy Plymouth theme"
+grep -Fq 'usr/bin/plymouthd' "$ROOT/bin/build-image" ||
+  fail "image validation does not inspect the initramfs for Plymouth"
+grep -Fq 'multi-user.target.wants/limine-snapper-sync.service' "$ROOT/bin/build-image" ||
+  fail "image validation does not require Limine snapshot synchronization"
+grep -Fq 'stop_target_background_helpers || true' "$ROOT/bin/build-image" ||
+  fail "failed image builds do not stop chroot helpers before unmounting"
+grep -Fq 'assert_target_boot_hooks_restored' "$ROOT/bin/build-image" ||
+  fail "image assembly does not verify that deferred boot hooks were restored"
+grep -Fq 'btrfs quota disable /' "$ROOT/bin/build-image" ||
+  fail "image assembly does not match the official post-Limine quota policy"
+grep -Fq 'target_chroot pacman -Qqe' "$ROOT/bin/build-image" ||
+  fail "successful images do not publish their exact explicit package inventory"
+grep -Fq 'target_chroot expac -Q' "$ROOT/bin/build-image" ||
+  fail "successful images do not publish an auditable package manifest"
+pass "the complete Omarchy Limine and Plymouth boot experience is enforced"
+
+grep -Eq '^\^linux-firmware\(\$\|-\)$' "$ROOT/profiles/aarch64-virt/remove-package-patterns" ||
+  fail "aarch64-virt does not exclude linux-firmware and its split packages"
+grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
+  fail "image validation does not enforce profile package removals"
+grep -Fq -- '--continue-at -' "$ROOT/bin/build-image" ||
+  fail "rolling image downloads cannot resume after interruption"
+grep -Fq 'partial="$2.part"' "$ROOT/bin/build-image" ||
+  fail "rolling image downloads are not staged atomically"
+grep -Fq 'PACMAN_CACHE_DIR="$CACHE_DIR/pacman-aarch64"' "$ROOT/bin/build-image" ||
+  fail "target package downloads are not retained across image build retries"
+grep -Fq 'pacman failed after 3 attempts' "$ROOT/bin/build-image" ||
+  fail "target package installation does not tolerate transient mirror failures"
+grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||
+  fail "ASCII-armored Arch Linux ARM keys are not normalized for gpgv"
+grep -Fq -- '--keyring "$ROOTFS_VERIFY_KEYRING"' "$ROOT/bin/build-image" ||
+  fail "rootfs verification does not use the normalized keyring"
+if grep -Fq 'linux-firmware' "$ROOT/bin/build-image"; then
+  fail "generic image builder contains a profile-specific firmware exception"
+fi
+pass "profile package rules remove firmware without generic-builder exceptions"
+
+if grep -Fq 'source=/dev,target=/dev' "$ROOT/bin/build-image-container"; then
+  fail "the privileged image container exposes the host /dev tree as a writable bind mount"
+fi
+grep -Fq 'ensure_loop_device_nodes' "$ROOT/bin/build-image" ||
+  fail "the isolated image container cannot restore missing base loop nodes"
+if sed -n '/^cleanup()/,/^}/p' "$ROOT/bin/build-image" | grep -Fq 'rm -rf'; then
+  fail "failed image cleanup recursively deletes mount-tree paths"
+fi
+grep -Fq 'path_has_mounts "$side"' "$ROOT/bin/build-image" ||
+  fail "failed image cleanup does not guard retained mount trees"
+grep -Fq 'gpgconf --homedir /etc/pacman.d/gnupg --kill all' "$ROOT/bin/build-image" ||
+  fail "image assembly does not stop the pacman keyring agent before unmounting"
+grep -Fq 'process_root == "$MOUNT_DIR"' "$ROOT/bin/build-image" ||
+  fail "target helper cleanup is not scoped to the disposable image root"
+grep -Fq 'managed-packages' "$ROOT/bin/build-image" ||
+  fail "the image does not record packages managed outside ALARM/AUR"
+grep -Fq 'validate_package_provenance' "$ROOT/bin/build-image" ||
+  fail "the image can combine packages with a different Omarchy source commit"
+grep -Fq 'etc/omarchy-aarch64/excluded-packages' "$ROOT/bin/build-image" ||
+  fail "the image does not preserve profile exclusions for reinstall workflows"
+grep -Fq 'cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"' \
+  "$ROOT/bin/build-image" ||
+  fail "the profile overlay can leak the builder UID/GID into the target rootfs"
+grep -Fq 'root_owned_paths=(' "$ROOT/bin/build-image" ||
+  fail "image validation does not enforce trusted rootfs directory ownership"
+pass "container isolation, mount cleanup, ownership, and local-package update boundaries are guarded"
+
+grep -q '^ConditionPathExists=/var/lib/omarchy/provisioning/pending$' \
+  "$OMARCHY_TEST_SOURCE/install/provisioning/omarchy-provision-owner.service" ||
+  fail "first-boot provisioning is not gated by its pending marker"
+bash "$OMARCHY_TEST_SOURCE/test/shell.d/aarch64-runtime-test.sh"
+pass "fork exposes the deferred AArch64 VM runtime contract"
+
+if rg -n 'asahi-alarm|grub-install' "$ROOT/bin" "$ROOT/config" "$ROOT/profiles" >/dev/null; then
+  fail "retired Apple/Asahi/GRUB installation logic remains active"
+fi
+pass "active image orchestration is independent of Apple, Asahi, and GRUB"
+
+if rg -n '^\[(asahi-alarm|omarchy-aarch64)\]|omarchy-pkgs-aarch64/releases' \
+  "$OMARCHY_TEST_SOURCE/default/pacman/pacman-aarch64.conf" \
+  "$OMARCHY_TEST_SOURCE/default/pacman/mirrorlist-aarch64" >/dev/null; then
+  fail "the target pacman configuration enables a non-ALARM runtime repository"
+fi
+pass "prebuilt inputs do not leak their unsigned repository into the guest"
+
+nested_source_pattern='[$]PROJECT_ROOT/omarchy-aarch64|[$]ROOT/omarchy-aarch64'
+if rg -n "$nested_source_pattern" \
+  "$ROOT/bin" "$ROOT/lib" "$ROOT/tests" >/dev/null; then
+  fail "the image project still assumes a nested Omarchy source checkout"
+fi
+pass "image orchestration does not depend on a nested source repository"
+
+echo "VERDICT: PASS"

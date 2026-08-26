@@ -1,0 +1,31 @@
+#!/bin/bash
+
+set -euo pipefail
+
+source_device=$(findmnt -nro SOURCE / | sed 's/\[.*//')
+source_device=$(readlink -f "$source_device")
+
+[[ -b $source_device ]] || exit 0
+
+partition_number=$(lsblk -nro PARTN "$source_device" | head -n1)
+parent_name=$(lsblk -nro PKNAME "$source_device" | head -n1)
+[[ $partition_number =~ ^[0-9]+$ && -n $parent_name ]] || exit 0
+
+disk_device="/dev/$parent_name"
+[[ -b $disk_device ]] || exit 0
+
+disk_size=$(lsblk -bdnro SIZE "$disk_device")
+partition_size=$(lsblk -bdnro SIZE "$source_device")
+partition_start=$(lsblk -dnro START "$source_device")
+[[ $disk_size =~ ^[0-9]+$ && $partition_size =~ ^[0-9]+$ && $partition_start =~ ^[0-9]+$ ]] || exit 1
+
+# lsblk reports START in 512-byte sectors. Avoid rewriting an already-full GPT
+# for alignment-sized trailing space.
+remaining=$((disk_size - partition_start * 512 - partition_size))
+if (( remaining > 16 * 1024 * 1024 )); then
+  parted --script --fix "$disk_device" resizepart "$partition_number" 100%
+  partprobe "$disk_device" || true
+  udevadm settle
+fi
+
+btrfs filesystem resize max /

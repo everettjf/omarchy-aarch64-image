@@ -1,0 +1,26 @@
+# Packages supplied as local image artifacts. Entries present in
+# prebuilt-packages.aarch64 are fetched and checksum-verified; the remainder
+# are built from the pinned PKGBUILDs.
+omarchy-keyring
+limine-mkinitcpio-hook
+limine-snapper-sync
+omarchy-settings
+omarchy
+omarchy-spice-guest-tools
+aether
+cliamp
+herdr
+localsend
+mise-bin
+omacalc
+omacut
+omawrite
+omarchy-nvim
+ttfx
+tobi-try
+ttf-ia-writer
+ttf-jetbrains-mono-nerd-basic
+ufw-docker
+xdg-terminal-exec
+yaru-icon-theme
+yay

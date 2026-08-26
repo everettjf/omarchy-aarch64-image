@@ -1,0 +1,62 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly PROJECT_ROOT
+readonly BUILDER_IMAGE=${OMARCHY_AARCH64_BUILDER_IMAGE:-omarchy-pkg-builder:latest-aarch64-edge}
+
+SOURCE_MOUNT=""
+CONTAINER_ARGS=()
+
+fail() {
+  printf '\033[31mError:\033[0m %s\n' "$*" >&2
+  exit 1
+}
+
+command -v docker >/dev/null 2>&1 || fail "missing required command: docker"
+command -v realpath >/dev/null 2>&1 || fail "missing required command: realpath"
+[[ $(uname -m) == aarch64 || $(uname -m) == arm64 ]] ||
+  fail "container image assembly currently requires a native AArch64 host"
+docker info >/dev/null 2>&1 || fail "Docker is unavailable or its daemon is not running"
+docker image inspect "$BUILDER_IMAGE" >/dev/null 2>&1 ||
+  fail "builder image not found: $BUILDER_IMAGE (run ./bin/build-packages first)"
+
+while (($#)); do
+  case $1 in
+    --omarchy-source)
+      (($# >= 2)) || fail "--omarchy-source requires a path"
+      [[ -z $SOURCE_MOUNT ]] || fail "--omarchy-source may only be specified once"
+      SOURCE_MOUNT=$(realpath -e -- "$2") || fail "Omarchy source not found: $2"
+      CONTAINER_ARGS+=(--omarchy-source /omarchy-source)
+      shift 2
+      ;;
+    *)
+      CONTAINER_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+DOCKER_ARGS=(
+  run --rm --privileged --user root
+  --mount "type=bind,source=$PROJECT_ROOT,target=/project"
+)
+if [[ -n $SOURCE_MOUNT ]]; then
+  DOCKER_ARGS+=(--mount "type=bind,source=$SOURCE_MOUNT,target=/omarchy-source,readonly")
+fi
+
+exec docker "${DOCKER_ARGS[@]}" \
+  --workdir /project \
+  --env "HOST_UID=$(id -u)" \
+  --env "HOST_GID=$(id -g)" \
+  "$BUILDER_IMAGE" \
+  bash -lc '
+    set -euo pipefail
+    restore_ownership() {
+      chown -R "$HOST_UID:$HOST_GID" /project/build
+    }
+    trap restore_ownership EXIT
+    pacman -Syu --needed --noconfirm btrfs-progs dosfstools parted qemu-img
+    /project/bin/build-image "$@"
+  ' build-image "${CONTAINER_ARGS[@]}"
