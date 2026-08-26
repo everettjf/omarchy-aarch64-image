@@ -32,6 +32,8 @@ OMARCHY_REPOSITORY_MANIFEST=""
 OMARCHY_REPOSITORY_KEY=""
 OMARCHY_REPOSITORY_GENERATED_AT=""
 OMARCHY_REPOSITORY_OMARCHY_VERSION=""
+OMARCHY_REPOSITORY_OVERRIDE=""
+OMARCHY_BUILD_REPOSITORY_URL=""
 OUTPUT_PATH=""
 FORCE=0
 REFRESH=0
@@ -76,6 +78,7 @@ Options:
   --size SIZE            Sparse virtual disk size (default: 64G)
   --format FORMAT        qcow2, raw, or both
   --omarchy-source PATH  Explicit local Omarchy checkout (development only)
+  --omarchy-repository P Complete signed local repository (development only)
   --rootfs PATH          Use a local Arch Linux ARM rootfs tarball
   --rootfs-signature P   Detached signature for --rootfs
   --rootfs-keyring PATH  Arch Linux ARM GPG keyring
@@ -156,6 +159,13 @@ parse_args() {
         (($# >= 2)) || fail "--omarchy-source requires a path"
         [[ -z $OMARCHY_SOURCE_OVERRIDE ]] || fail "--omarchy-source may only be specified once"
         OMARCHY_SOURCE_OVERRIDE=$2
+        shift 2
+        ;;
+      --omarchy-repository)
+        (($# >= 2)) || fail "--omarchy-repository requires a path"
+        [[ -z $OMARCHY_REPOSITORY_OVERRIDE ]] ||
+          fail "--omarchy-repository may only be specified once"
+        OMARCHY_REPOSITORY_OVERRIDE=$(absolute_path "$2")
         shift 2
         ;;
       --rootfs)
@@ -418,12 +428,31 @@ resolve_omarchy_repository() {
   OMARCHY_REPOSITORY_MANIFEST="$CACHE_DIR/omarchy-aarch64-repository-manifest.json"
   OMARCHY_REPOSITORY_KEY="$CACHE_DIR/omarchy-aarch64.gpg"
 
-  # These files describe releases/latest, so fetch them for every build rather
-  # than silently validating a stale cached snapshot against a newer database.
-  download_file "$OMARCHY_AARCH64_REPOSITORY_URL/repository-manifest.json" \
-    "$OMARCHY_REPOSITORY_MANIFEST"
-  download_file "$OMARCHY_AARCH64_REPOSITORY_URL/omarchy-aarch64.gpg" \
-    "$OMARCHY_REPOSITORY_KEY"
+  if [[ -n $OMARCHY_REPOSITORY_OVERRIDE ]]; then
+    [[ -d $OMARCHY_REPOSITORY_OVERRIDE ]] ||
+      fail "local Omarchy repository not found: $OMARCHY_REPOSITORY_OVERRIDE"
+    for required in SHA256SUMS repository-manifest.json omarchy-aarch64.gpg \
+      omarchy.db omarchy.db.sig; do
+      [[ -f $OMARCHY_REPOSITORY_OVERRIDE/$required ]] ||
+        fail "local Omarchy repository is missing $required"
+    done
+    log "Verifying local Omarchy AArch64 repository"
+    (cd "$OMARCHY_REPOSITORY_OVERRIDE" && sha256sum --check SHA256SUMS)
+    install -m644 "$OMARCHY_REPOSITORY_OVERRIDE/repository-manifest.json" \
+      "$OMARCHY_REPOSITORY_MANIFEST"
+    install -m644 "$OMARCHY_REPOSITORY_OVERRIDE/omarchy-aarch64.gpg" \
+      "$OMARCHY_REPOSITORY_KEY"
+    OMARCHY_BUILD_REPOSITORY_URL=file:///run/omarchy-aarch64-repository
+  else
+    # These files describe releases/latest, so fetch them for every build rather
+    # than silently validating a stale cached snapshot against a newer database.
+    download_file "$OMARCHY_AARCH64_REPOSITORY_URL/repository-manifest.json" \
+      "$OMARCHY_REPOSITORY_MANIFEST"
+    download_file "$OMARCHY_AARCH64_REPOSITORY_URL/omarchy-aarch64.gpg" \
+      "$OMARCHY_REPOSITORY_KEY"
+    OMARCHY_BUILD_REPOSITORY_URL=$OMARCHY_AARCH64_REPOSITORY_URL
+  fi
+
   validate_omarchy_repository_manifest
   verify_omarchy_repository_key
   log "Verified signed Omarchy AArch64 repository snapshot from $OMARCHY_REPOSITORY_GENERATED_AT"
@@ -648,6 +677,12 @@ mount_chroot_filesystems() {
   done
   mkdir -p "$MOUNT_DIR/run"
   mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$MOUNT_DIR/run"
+  if [[ -n $OMARCHY_REPOSITORY_OVERRIDE ]]; then
+    install -d -m755 "$MOUNT_DIR/run/omarchy-aarch64-repository"
+    mount --bind "$OMARCHY_REPOSITORY_OVERRIDE" \
+      "$MOUNT_DIR/run/omarchy-aarch64-repository"
+    mount -o remount,bind,ro "$MOUNT_DIR/run/omarchy-aarch64-repository"
+  fi
 }
 
 target_chroot() {
@@ -735,6 +770,7 @@ retry_target_pacman() {
 }
 
 write_omarchy_repository_configuration() {
+  local server=${1:-$OMARCHY_AARCH64_REPOSITORY_URL}
   local pacman_conf="$MOUNT_DIR/etc/pacman.conf"
   local repository_conf="$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf"
   local include='Include = /etc/pacman.d/omarchy-aarch64.conf'
@@ -745,7 +781,7 @@ write_omarchy_repository_configuration() {
 # Managed by omarchy-aarch64-image.
 [omarchy]
 SigLevel = Required
-Server = $OMARCHY_AARCH64_REPOSITORY_URL
+Server = $server
 EOF
 
   if ! grep -qxF "$include" "$pacman_conf"; then
@@ -773,7 +809,7 @@ configure_package_manager() {
 
   install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/pacman-aarch64.conf" "$MOUNT_DIR/etc/pacman.conf"
   install -m644 "$OMARCHY_SOURCE_DIR/default/pacman/mirrorlist-aarch64" "$MOUNT_DIR/etc/pacman.d/mirrorlist"
-  write_omarchy_repository_configuration
+  write_omarchy_repository_configuration "$OMARCHY_BUILD_REPOSITORY_URL"
   target_chroot pacman-key --init
   if [[ -f $MOUNT_DIR/usr/share/pacman/keyrings/archlinux.gpg ]]; then
     target_chroot pacman-key --populate archlinux
@@ -998,6 +1034,8 @@ write_image_provenance() {
     printf 'omarchy_source_kind=%s\n' "$OMARCHY_SOURCE_KIND"
     printf 'omarchy_source_dirty=%s\n' "$OMARCHY_SOURCE_DIRTY"
     printf 'omarchy_repository=%s\n' "$OMARCHY_AARCH64_REPOSITORY_URL"
+    printf 'omarchy_repository_build_source=%s\n' \
+      "$([[ -n $OMARCHY_REPOSITORY_OVERRIDE ]] && printf local || printf release)"
     printf 'omarchy_repository_signing_fingerprint=%s\n' "$OMARCHY_AARCH64_SIGNING_FINGERPRINT"
     printf 'omarchy_repository_generated_at=%s\n' "$OMARCHY_REPOSITORY_GENERATED_AT"
     printf 'omarchy_repository_manifest_sha256=%s\n' \

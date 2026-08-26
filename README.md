@@ -136,8 +136,22 @@ sudo ./bin/build-image --rootfs /path/to/ArchLinuxARM-aarch64-latest.tar.gz
 ```
 
 `--omarchy-source /path/to/omarchy-aarch64` is an explicit development
-override. Its commit must match the `omarchy` package in the verified Release;
-publish the corresponding package snapshot first when testing source changes.
+override. `--omarchy-repository /path/to/repository` likewise consumes a
+complete, signed repository prepared locally by `omarchy-pkgs-aarch64`. Use
+the two together to test unpublished source and package changes:
+
+```bash
+./bin/build-image-container \
+  --omarchy-source ../omarchy-aarch64 \
+  --omarchy-repository ../omarchy-pkgs-aarch64/pkgs.omarchy.org/stable/aarch64 \
+  --force
+```
+
+The local repository is mounted read-only and is used only while assembling
+the image. The installed guest still points at the latest GitHub Release, so a
+successful test image follows the normal update channel without rebuilding.
+The source commit must match the `omarchy` version recorded in the repository
+manifest.
 
 The Arch Linux ARM rootfs is verified with its signing key and pinned signer
 fingerprint. Node.js is checked against its published SHA-256 list. Cached

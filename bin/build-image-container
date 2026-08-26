@@ -7,6 +7,7 @@ readonly PROJECT_ROOT
 readonly BUILDER_IMAGE=${OMARCHY_AARCH64_BUILDER_IMAGE:-omarchy-pkg-builder:latest-aarch64-edge}
 
 SOURCE_MOUNT=""
+REPOSITORY_MOUNT=""
 CONTAINER_ARGS=()
 
 fail() {
@@ -31,6 +32,14 @@ while (($#)); do
       CONTAINER_ARGS+=(--omarchy-source /omarchy-source)
       shift 2
       ;;
+    --omarchy-repository)
+      (($# >= 2)) || fail "--omarchy-repository requires a path"
+      [[ -z $REPOSITORY_MOUNT ]] || fail "--omarchy-repository may only be specified once"
+      REPOSITORY_MOUNT=$(realpath -e -- "$2") || fail "Omarchy repository not found: $2"
+      [[ -d $REPOSITORY_MOUNT ]] || fail "Omarchy repository is not a directory: $2"
+      CONTAINER_ARGS+=(--omarchy-repository /omarchy-repository)
+      shift 2
+      ;;
     *)
       CONTAINER_ARGS+=("$1")
       shift
@@ -44,6 +53,9 @@ DOCKER_ARGS=(
 )
 if [[ -n $SOURCE_MOUNT ]]; then
   DOCKER_ARGS+=(--mount "type=bind,source=$SOURCE_MOUNT,target=/omarchy-source,readonly")
+fi
+if [[ -n $REPOSITORY_MOUNT ]]; then
+  DOCKER_ARGS+=(--mount "type=bind,source=$REPOSITORY_MOUNT,target=/omarchy-repository,readonly")
 fi
 
 exec docker "${DOCKER_ARGS[@]}" \

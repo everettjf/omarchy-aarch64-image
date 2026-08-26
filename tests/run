@@ -93,6 +93,14 @@ fi
     "$MOUNT_DIR/etc/pacman.conf" || fail "signed repository include was not installed"
   grep -qxF 'SigLevel = Required' "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
     fail "signed repository does not require signatures"
+  write_omarchy_repository_configuration file:///run/omarchy-aarch64-repository
+  grep -qxF 'Server = file:///run/omarchy-aarch64-repository' \
+    "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "local signed repository cannot be selected during development builds"
+  write_omarchy_repository_configuration
+  grep -qxF "Server = $OMARCHY_AARCH64_REPOSITORY_URL" \
+    "$MOUNT_DIR/etc/pacman.d/omarchy-aarch64.conf" ||
+    fail "development builds do not restore the public update repository"
   bash -n "$MOUNT_DIR/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository"
 
   for package in kdenlive libreoffice-fresh moonlight-qt hyprsunset gpu-screen-recorder; do
@@ -304,6 +312,11 @@ grep -Fq 'etc/omarchy-aarch64/excluded-packages' "$ROOT/bin/build-image" ||
 grep -Fq 'cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"' \
   "$ROOT/bin/build-image" ||
   fail "the profile overlay can leak the builder UID/GID into the target rootfs"
+grep -Fq -- '--omarchy-repository /omarchy-repository' "$ROOT/bin/build-image-container" ||
+  fail "the container wrapper cannot expose a local signed repository to the builder"
+grep -Fq 'mount -o remount,bind,ro "$MOUNT_DIR/run/omarchy-aarch64-repository"' \
+  "$ROOT/bin/build-image" ||
+  fail "the local development repository is writable inside the image chroot"
 grep -Fq 'root_owned_paths=(' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce trusted rootfs directory ownership"
 pass "container isolation, mount cleanup, ownership, and repository update boundaries are guarded"
