@@ -113,9 +113,14 @@ fi
       fail "aarch64-virt still excludes an upstream development package: $package"
     fi
   done
-  for package in ufw-docker tobi-try; do
+  for package in dotnet-runtime-bin obsidian pinta tensaku tzupdate ufw-docker tobi-try; do
     grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
       fail "required Omarchy repository package is not selected: $package"
+  done
+  for package in dotnet-runtime obsidian pinta tensaku tzupdate; do
+    if grep -qx "$package" "$PROFILE_DIR/excluded-packages"; then
+      fail "supported AArch64 desktop package remains excluded: $package"
+    fi
   done
   for package in gst-plugin-pipewire pipewire pipewire-alsa pipewire-audio pipewire-jack \
     pipewire-pulse wireplumber; do

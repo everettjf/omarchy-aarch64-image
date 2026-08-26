@@ -85,6 +85,9 @@ image build fails instead of combining mismatched source and packages.
 - The Omarchy desktop and development environment, excluding LibreOffice,
   Kdenlive, Moonlight, Night Light, and GPU screen recording for this VM
   profile.
+- The architecture-compatible Omarchy applications Obsidian, Pinta, Tensaku,
+  and tzupdate. Pinta uses the maintained Microsoft binary .NET runtime; the
+  .NET SDK remains a package-build dependency and is not installed in the VM.
 - No `linux-firmware`, split `linux-firmware-*`, `sof-firmware`, Bluetooth,
   Thunderbolt, DDC/backlight, wireless-regulatory, or physical power-profile
   stack.
