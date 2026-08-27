@@ -158,6 +158,8 @@ PY
     (.disk.parts | length) > 0
   ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
     fail "EZVM release manifest is invalid"
+  grep -q 'conv=sparse' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not recreate sparse disk extents on macOS"
   pass "EZVM release packager produces verified split raw assets and installer"
 )
 

@@ -102,7 +102,7 @@ installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
 #!/bin/bash
 set -euo pipefail
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat tar; do
+for command in awk cat curl dd dirname gzip jq mkdir mktemp open shasum stat tar; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required macOS command: $command"
 done
 HEADER
@@ -132,9 +132,10 @@ for index in "${!parts[@]}"; do
 done
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
 [[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
-cat "${downloaded[@]}" | gzip -dc | tar -xf - -C "$work"
 raw="$work/$image_name"
-[[ -f $raw ]] || fail "sparse archive did not contain the expected raw image"
+cat "${downloaded[@]}" | gzip -dc | tar -xOf - "$image_name" |
+  dd of="$raw" bs=1048576 conv=sparse 2>/dev/null
+[[ -f $raw ]] || fail "sparse archive did not produce the expected raw image"
 actual_size=$(stat -f %z "$raw")
 [[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')
