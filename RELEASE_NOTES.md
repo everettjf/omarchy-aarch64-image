@@ -1,4 +1,17 @@
-## Quick install on macOS
+## Quick install with EZVM
+
+Install EZVM 5.0.0 or newer, then run:
+
+```bash
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
+```
+
+The installer downloads and verifies every split raw-image payload, verifies
+the reconstructed disk, and asks EZVM to create a new `.ezvm` machine with a
+fresh machine identifier and EFI variable store. No firmware state or host
+identity is distributed in the image.
+
+## Quick install with UTM
 
 Requirements: a current UTM installation and at least 12 GB of free disk space
 while the bundle is downloaded and unpacked.
@@ -6,7 +19,7 @@ while the bundle is downloaded and unpacked.
 Open Terminal and run:
 
 ```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
 ```
 
 The command fetches the small installer from the latest Release. It then
@@ -18,7 +31,7 @@ the VM.
 To choose a different parent directory:
 
 ```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash -s -- "$1"' _ "/path/for/virtual-machines"
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash -s -- "$1"' _ "/path/for/virtual-machines"
 ```
 
 For a GUI-oriented alternative, download **`Install-Omarchy-virt.zip`** from

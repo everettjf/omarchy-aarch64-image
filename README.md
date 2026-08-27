@@ -1,9 +1,10 @@
 # Omarchy AArch64 Image
 
-This project builds a generic AArch64 UEFI disk image for QEMU-compatible
-virtual machines. The only supported profile is `aarch64-virt`, targeting
-QEMU's `virt` machine and UTM's QEMU backend. It does not target Apple hardware,
-Asahi Linux, SBSA machines, physical AArch64 boards, GRUB, or x86 multilib.
+This project builds a generic AArch64 UEFI disk image for virtual machines.
+The `aarch64-virt` profile publishes a QCOW2 bundle for UTM's QEMU backend and
+a sparse raw image for EZVM's Apple Virtualization.framework backend. It does
+not target Apple hardware, Asahi Linux, SBSA machines, physical AArch64 boards,
+GRUB, or x86 multilib.
 
 The project is one part of a three-repository release pipeline:
 
@@ -105,7 +106,7 @@ The distributed image is intentionally unencrypted. Per-machine encryption
 requires an installer that creates a unique LUKS container rather than a shared
 key embedded in a reusable disk image.
 
-## GitHub and UTM releases
+## GitHub, UTM, and EZVM releases
 
 The `Publish AArch64 UTM image` workflow builds on GitHub's native
 `ubuntu-24.04-arm` runner. It checks out the reviewed Omarchy source and native
@@ -115,8 +116,8 @@ creates a draft Release. The draft is published only after GitHub reports the
 same SHA-256 digest for every uploaded asset.
 
 Create a version tag such as `v4.0.1-virt.1`, or run the workflow manually and
-provide that tag. The Release does not duplicate the disk as a standalone
-QCOW2. It contains:
+provide that tag. The Release contains independently verified UTM and EZVM
+installation paths:
 
 - `install-Omarchy-virt.command`, used by the one-command macOS installer;
 - `Install-Omarchy-virt.zip`, the GUI-oriented alternative;
@@ -124,11 +125,24 @@ QCOW2. It contains:
 - the executable installer by itself for command-line users;
 - release/image manifests and SHA-256 checksums; and
 - image provenance and an archive of the exact package inventories.
+- `install-Omarchy-ezvm.command`, the one-command EZVM installer;
+- `ezvm-release-manifest.json`; and
+- numbered gzip-compressed raw-image parts for EZVM 5.0.0 or newer.
+
+The EZVM installer verifies every part, the compressed stream, the raw disk
+size, and the final raw-disk SHA-256 before invoking EZVM. EZVM then creates a
+new `.ezvm` machine, machine identifier, NVRAM store, and host-side
+configuration. The published image contains no reusable host identity or EFI
+variable storage.
+
+```bash
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
+```
 
 The primary user entry point always follows the latest verified Release:
 
 ```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
 ```
 
 GitHub limits each Release asset to 2 GiB, while the compressed UTM bundle can

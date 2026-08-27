@@ -135,6 +135,32 @@ PY
   pass "UTM release packager produces verified split assets and installer"
 )
 
+(
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  truncate --size 2500K "$fixture/test.raw"
+  OMARCHY_EZVM_PART_SIZE_MIB=1 "$ROOT/bin/package-ezvm-release" \
+    --tag v4.0.1-test.1 \
+    --image "$fixture/test.raw" \
+    --output "$fixture/release" >/dev/null
+  (cd "$fixture/release" && sha256sum --check SHA256SUMS >/dev/null) ||
+    fail "EZVM release asset checksums are invalid"
+  bash -n "$fixture/release/install-Omarchy-ezvm.command"
+  [[ -x $fixture/release/install-Omarchy-ezvm.command ]] ||
+    fail "macOS EZVM installer is not executable"
+  jq -e '
+    .schema == 1 and
+    .product == "omarchy-aarch64-ezvm" and
+    .architecture == "arm64" and
+    .minimum_ezvm_version == "5.0.0" and
+    .disk.format == "raw" and
+    .disk.compression == "gzip" and
+    (.disk.parts | length) > 0
+  ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
+    fail "EZVM release manifest is invalid"
+  pass "EZVM release packager produces verified split raw assets and installer"
+)
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$ROOT"/bin/* "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root
   pass "project scripts pass shellcheck"
@@ -424,6 +450,9 @@ grep -Fq "OMARCHY_UTM_CONSUME_IMAGE: '1'" "$ROOT/.github/workflows/release-image
 grep -Fq 'qemu-img check build/omarchy-aarch64-virt.qcow2' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "the release workflow does not validate the finished QCOW2"
+grep -Fq -- '--format both' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'package-ezvm-release' "$ROOT/.github/workflows/release-image.yml" ||
+  fail "the release workflow does not build and package the EZVM raw image"
 if grep -Fq 'actions/upload-artifact' "$ROOT/.github/workflows/release-image.yml"; then
   fail "the multi-gigabyte image is copied through Actions artifact storage"
 fi
@@ -432,7 +461,9 @@ grep -Fq 'uses: actions/cache/save@v6' "$ROOT/.github/workflows/release-image.ym
 grep -Fq -- '--notes-file RELEASE_NOTES.md' "$ROOT/.github/workflows/release-image.yml" &&
   grep -Fq 'releases/latest/download/install-Omarchy-virt.command' \
     "$ROOT/RELEASE_NOTES.md" &&
-  grep -Fq 'releases/latest/download/install-Omarchy-virt.command' "$ROOT/README.md" ||
+  grep -Fq 'releases/latest/download/install-Omarchy-virt.command' "$ROOT/README.md" &&
+  grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/RELEASE_NOTES.md" &&
+  grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/README.md" ||
   fail "GitHub Releases do not expose the one-command latest installer"
 grep -Fq 'efi_variable_storage: "omitted-and-created-by-utm"' \
   "$ROOT/bin/package-utm-release" ||

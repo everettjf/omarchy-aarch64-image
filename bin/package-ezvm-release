@@ -1,0 +1,143 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-virt.raw"
+OUTPUT_DIR="$PROJECT_ROOT/build/release-assets"
+RELEASE_TAG=""
+PART_SIZE_MIB=${OMARCHY_EZVM_PART_SIZE_MIB:-1900}
+RELEASE_REPOSITORY=${OMARCHY_EZVM_RELEASE_REPOSITORY:-everettjf/omarchy-aarch64-image}
+
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+absolute_existing_path() { (cd -- "$(dirname -- "$1")" && printf '%s/%s\n' "$PWD" "$(basename -- "$1")"); }
+absolute_directory() { mkdir -p -- "$1"; (cd -- "$1" && printf '%s\n' "$PWD"); }
+file_size() { stat -f %z "$1" 2>/dev/null || stat --format=%s "$1"; }
+
+while (($#)); do
+  case $1 in
+    --tag) RELEASE_TAG=${2:?}; shift 2 ;;
+    --image) IMAGE_PATH=$(absolute_existing_path "${2:?}"); shift 2 ;;
+    --output) OUTPUT_DIR=$(absolute_directory "${2:?}"); shift 2 ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+[[ $RELEASE_TAG =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "a valid --tag is required"
+[[ -f $IMAGE_PATH ]] || fail "raw image not found: $IMAGE_PATH"
+[[ $PART_SIZE_MIB =~ ^[0-9]+$ ]] && ((PART_SIZE_MIB > 0 && PART_SIZE_MIB < 2048)) ||
+  fail "part size must be between 1 and 2047 MiB"
+for command in awk cat dirname find gzip install jq mkdir sed sha256sum split stat; do
+  command -v "$command" >/dev/null || fail "missing required command: $command"
+done
+
+mkdir -p "$OUTPUT_DIR"
+prefix="$OUTPUT_DIR/Omarchy-ezvm.raw.gz.part-"
+rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
+  "$OUTPUT_DIR/ezvm-release-manifest.json"
+
+printf 'Compressing and splitting the EZVM raw image…\n'
+gzip -1 -c -- "$IMAGE_PATH" |
+  split -d -a 2 -b "${PART_SIZE_MIB}m" - "$prefix"
+
+parts=()
+while IFS= read -r part; do parts+=("$part"); done < <(
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.raw.gz.part-*' -print | sort
+)
+((${#parts[@]} > 0)) || fail "compression produced no parts"
+image_sha=$(sha256sum "$IMAGE_PATH" | awk '{print $1}')
+image_size=$(file_size "$IMAGE_PATH")
+archive_sha=$(cat -- "${parts[@]}" | sha256sum | awk '{print $1}')
+archive_size=0
+parts_json='[]'
+for part in "${parts[@]}"; do
+  name=${part##*/}
+  checksum=$(sha256sum "$part" | awk '{print $1}')
+  size=$(file_size "$part")
+  archive_size=$((archive_size + size))
+  parts_json=$(jq --arg name "$name" --arg sha256 "$checksum" --argjson size "$size" \
+    '. + [{name: $name, size: $size, sha256: $sha256}]' <<<"$parts_json")
+done
+
+jq -n \
+  --arg tag "$RELEASE_TAG" --arg repository "$RELEASE_REPOSITORY" \
+  --arg image_sha256 "$image_sha" --argjson image_size "$image_size" \
+  --arg archive_sha256 "$archive_sha" --argjson archive_size "$archive_size" \
+  --argjson parts "$parts_json" '
+  {
+    schema: 1,
+    product: "omarchy-aarch64-ezvm",
+    architecture: "arm64",
+    release: {repository: $repository, tag: $tag},
+    minimum_ezvm_version: "5.0.0",
+    disk: {
+      format: "raw",
+      compression: "gzip",
+      size: $image_size,
+      sha256: $image_sha256,
+      compressed_size: $archive_size,
+      compressed_sha256: $archive_sha256,
+      parts: $parts
+    },
+    virtual_machine: {name: "Omarchy", boot: "uefi", directory_sharing: "virtiofs"}
+  }' >"$OUTPUT_DIR/ezvm-release-manifest.json"
+
+installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
+{
+  cat <<'HEADER'
+#!/bin/bash
+set -euo pipefail
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat; do
+  command -v "$command" >/dev/null 2>&1 || fail "missing required macOS command: $command"
+done
+HEADER
+  printf "repository='%s'\ntag='%s'\n" "$RELEASE_REPOSITORY" "$RELEASE_TAG"
+  printf "image_sha='%s'\nimage_size='%s'\narchive_sha='%s'\n" "$image_sha" "$image_size" "$archive_sha"
+  printf 'parts=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "${part##*/}"; done; printf ')\n'
+  printf 'part_sha=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "$(sha256sum "$part" | awk '{print $1}')"; done; printf ')\n'
+  cat <<'BODY'
+destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
+[[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
+[[ ! -e $destination ]] || fail "destination already exists: $destination"
+app_exec=${EZVM_APP_EXECUTABLE:-/Applications/EZVM.app/Contents/MacOS/EZVM}
+[[ -x $app_exec ]] || fail "EZVM 5.0.0 or newer is required in /Applications"
+work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
+cleanup() { rm -rf "$work"; }
+trap cleanup EXIT
+base_url="https://github.com/$repository/releases/download/$tag"
+downloaded=()
+for index in "${!parts[@]}"; do
+  name=${parts[$index]}
+  printf 'Downloading %s (%d/%d)…\n' "$name" "$((index + 1))" "${#parts[@]}"
+  curl --fail --location --retry 3 --output "$work/$name" "$base_url/$name"
+  actual=$(shasum -a 256 "$work/$name" | awk '{print $1}')
+  [[ $actual == "${part_sha[$index]}" ]] || fail "checksum mismatch: $name"
+  downloaded+=("$work/$name")
+done
+actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
+[[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
+raw="$work/Omarchy.raw"
+cat "${downloaded[@]}" | gzip -dc >"$raw"
+actual_size=$(stat -f %z "$raw")
+[[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
+actual=$(shasum -a 256 "$raw" | awk '{print $1}')
+[[ $actual == "$image_sha" ]] || fail "raw image checksum mismatch"
+mkdir -p "$(dirname "$destination")"
+"$app_exec" --ezvm-install-linux-image "$raw" --destination "$destination" --name Omarchy
+open -a EZVM
+printf '\nInstalled Omarchy for EZVM: %s\n' "$destination"
+BODY
+} >"$installer"
+chmod 0755 "$installer"
+
+rm -f "$OUTPUT_DIR/SHA256SUMS"
+(
+  cd "$OUTPUT_DIR"
+  files=()
+  while IFS= read -r file; do files+=("$file"); done < <(
+    find . -maxdepth 1 -type f ! -name SHA256SUMS -print | sed 's#^./##' | sort
+  )
+  sha256sum "${files[@]}" >SHA256SUMS
+)
+printf 'Prepared %d EZVM image part(s) in %s\n' "${#parts[@]}" "$OUTPUT_DIR"
