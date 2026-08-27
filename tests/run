@@ -277,6 +277,13 @@ grep -Eq '^\^linux-firmware\(\$\|-\)$' "$ROOT/profiles/aarch64-virt/remove-packa
   fail "aarch64-virt does not exclude linux-firmware and its split packages"
 grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce profile package removals"
+grep -Fq 'share            /mnt/hostshare     9p     trans=virtio,version=9p2000.L,rw,_netdev,nofail,auto 0 0' \
+  "$ROOT/bin/build-image" ||
+  fail "the image does not preconfigure QEMU host directory sharing"
+grep -Fq 'kernel/fs/9p/9p.ko' "$ROOT/bin/build-image" ||
+  fail "image validation does not require 9p filesystem support"
+grep -Fq 'kernel/net/9p/9pnet_virtio.ko' "$ROOT/bin/build-image" ||
+  fail "image validation does not require the VirtIO 9p transport"
 grep -Fq -- '--continue-at -' "$ROOT/bin/build-image" ||
   fail "rolling image downloads cannot resume after interruption"
 grep -Fq 'partial="$2.part"' "$ROOT/bin/build-image" ||

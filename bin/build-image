@@ -656,12 +656,19 @@ write_fstab() {
   esp_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p1")
   [[ -n $root_uuid && -n $esp_uuid ]] || fail "failed to read filesystem UUIDs"
 
+  # Use a frontend-neutral guest path for the host's QEMU 9p share. UTM uses
+  # the compatible fixed mount tag "share". The nofail entry is harmless when
+  # another QEMU-compatible host does not attach a share.
+  install -d -m755 "$MOUNT_DIR/mnt/hostshare"
+
   cat >"$MOUNT_DIR/etc/fstab" <<EOF
 UUID=$root_uuid  /                  btrfs  rw,noatime,compress=zstd:3,subvol=@          0 0
 UUID=$root_uuid  /home             btrfs  rw,noatime,compress=zstd:3,subvol=@home      0 0
 UUID=$root_uuid  /var/log          btrfs  rw,noatime,compress=zstd:3,subvol=@log       0 0
 UUID=$root_uuid  /var/cache/pacman/pkg btrfs rw,noatime,compress=zstd:3,subvol=@pkg    0 0
 UUID=$esp_uuid   /boot              vfat   rw,umask=0077                               0 2
+# QEMU 9p host shared folder; compatible frontends expose the tag "share".
+share            /mnt/hostshare     9p     trans=virtio,version=9p2000.L,rw,_netdev,nofail,auto 0 0
 EOF
 }
 
@@ -1059,6 +1066,8 @@ validate_target() {
     etc
     etc/systemd
     etc/systemd/system
+    mnt
+    mnt/hostshare
     usr
     usr/lib
   )
@@ -1106,6 +1115,15 @@ validate_target() {
   done
   [[ -f $MOUNT_DIR/boot/Image ]] ||
     fail "target validation failed: Arch Linux ARM kernel is missing"
+  compgen -G "$MOUNT_DIR/usr/lib/modules/*/kernel/fs/9p/9p.ko*" >/dev/null ||
+    fail "target validation failed: the kernel has no 9p filesystem module"
+  compgen -G "$MOUNT_DIR/usr/lib/modules/*/kernel/net/9p/9pnet_virtio.ko*" >/dev/null ||
+    fail "target validation failed: the kernel has no VirtIO 9p transport module"
+  grep -Eq '^share[[:space:]]+/mnt/hostshare[[:space:]]+9p[[:space:]]+trans=virtio,version=9p2000\.L,rw,_netdev,nofail,auto[[:space:]]+0[[:space:]]+0$' \
+    "$MOUNT_DIR/etc/fstab" ||
+    fail "target validation failed: QEMU host sharing is not configured with the share tag"
+  [[ $(stat -c '%a' "$MOUNT_DIR/mnt/hostshare") == 755 ]] ||
+    fail "target validation failed: /mnt/hostshare does not have mode 0755"
   file "$MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi" |
     grep -q 'PE32+ executable for EFI (application), ARM64' ||
     fail "target validation failed: the Omarchy UKI is not an AArch64 EFI application"

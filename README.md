@@ -80,6 +80,9 @@ image build fails instead of combining mismatched source and packages.
   disable its existing `Omarchy` direct-boot entry before testing this path.
 - VirtIO graphics, disk, network, RNG, QEMU guest-agent, SPICE clipboard and
   dynamic-display integration.
+- QEMU 9p host-directory sharing preconfigured at `/mnt/hostshare` with the
+  conventional `share` tag. Its `nofail` mount does not block boot when no
+  share is attached.
 - PipeWire audio with PulseAudio, ALSA, JACK, and GStreamer compatibility. The
   printing stack is retained.
 - The Omarchy desktop and development environment, excluding LibreOffice,
@@ -182,7 +185,12 @@ Install `qemu-system-aarch64`, `qemu-img`, and AArch64 EDK2 firmware, then run:
 The helper is a basic GTK and SSH-forwarding launcher. UTM can import the same
 QCOW2 using an ARM64 `virt` machine, UEFI, VirtIO disk/network/GPU, and a SPICE
 agent channel. The SPICE channel is required for guest clipboard sharing and
-dynamic display resizing.
+dynamic display resizing. QEMU frontends can expose a host directory at the
+preconfigured `/mnt/hostshare` path by assigning its 9p device the `share`
+mount tag. In UTM, select a shared directory and choose VirtFS rather than
+SPICE WebDAV. Host and guest UID/GID values can differ, so follow
+[UTM's `bindfs` guidance](https://docs.getutm.app/guest-support/linux/#virtfs)
+when the raw mount is not writable by the guest user.
 
 ## Profiles and tests
 
