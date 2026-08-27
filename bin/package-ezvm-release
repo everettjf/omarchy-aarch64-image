@@ -45,7 +45,8 @@ rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
 
 printf 'Archiving the sparse EZVM raw image, compressing, and splitting…\n'
 if tar --help 2>&1 | grep -q -- '--sparse'; then
-  tar --sparse -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
+  tar --format=pax --sparse --sparse-version=1.0 \
+    -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
 else
   tar -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
 fi |
@@ -102,7 +103,7 @@ installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
 #!/bin/bash
 set -euo pipefail
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-for command in awk cat curl dd dirname gzip jq mkdir mktemp open shasum stat tar; do
+for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat tar; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required macOS command: $command"
 done
 HEADER
@@ -133,8 +134,7 @@ done
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
 [[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
 raw="$work/$image_name"
-cat "${downloaded[@]}" | gzip -dc | tar -xOf - "$image_name" |
-  dd of="$raw" bs=1048576 conv=sparse 2>/dev/null
+cat "${downloaded[@]}" | gzip -dc | tar -xf - -C "$work"
 [[ -f $raw ]] || fail "sparse archive did not produce the expected raw image"
 actual_size=$(stat -f %z "$raw")
 [[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
