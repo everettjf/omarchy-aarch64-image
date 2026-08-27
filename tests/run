@@ -29,7 +29,11 @@ bash -n "$OMARCHY_TEST_SOURCE/install/user/mise-work.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/hardware/all.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/hardware/virtual-machine.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/post-install/pacman.sh"
-bash -n "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner"
+  bash -n "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner"
+  grep -q 'failed to discard unused Btrfs extents' "$ROOT/bin/build-image" ||
+    fail "image build does not require a successful final filesystem trim"
+  grep -q 'raw image is not sparse after trim' "$ROOT/bin/build-image" ||
+    fail "image build does not enforce sparse raw output"
 pass "all project and modified runtime scripts parse as Bash"
 
 python3 - "$ROOT/utm/Omarchy-virt.utm/config.plist" "$ROOT/utm/icon.png.base64" <<'PY'

@@ -1329,8 +1329,11 @@ create_factory_snapshot() {
 }
 
 detach_image() {
+  local trim_result
   sync
-  fstrim "$MOUNT_DIR" >/dev/null 2>&1 || true
+  trim_result=$(fstrim -v "$MOUNT_DIR") ||
+    fail "failed to discard unused Btrfs extents before image packaging"
+  log "$trim_result"
   umount -R "$MOUNT_DIR"
   losetup -d "$LOOP_DEVICE"
   LOOP_DEVICE=""
@@ -1353,7 +1356,7 @@ finalize_image_artifact() {
 }
 
 emit_images() {
-  local qcow_temp raw_output raw_temp
+  local qcow_temp raw_output raw_temp logical_size allocated_size
   raw_output=$(raw_output_path)
   qcow_temp="$OUTPUT_PATH.part"
   raw_temp="$raw_output.part"
@@ -1370,6 +1373,10 @@ emit_images() {
       ;;
     both)
       cp --sparse=always "$RAW_TEMP" "$raw_temp"
+      logical_size=$(stat -c %s "$raw_temp")
+      allocated_size=$(($(stat -c %b "$raw_temp") * 512))
+      ((allocated_size < logical_size / 2)) ||
+        fail "raw image is not sparse after trim (${allocated_size}/${logical_size} bytes allocated)"
       log "Converting sparse raw disk to compressed QCOW2"
       qemu-img convert -p -c -f raw -O qcow2 "$RAW_TEMP" "$qcow_temp"
       finalize_image_artifact "$raw_temp" "$raw_output"
