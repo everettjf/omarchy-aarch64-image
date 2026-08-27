@@ -118,11 +118,18 @@ Create a version tag such as `v4.0.1-virt.1`, or run the workflow manually and
 provide that tag. The Release does not duplicate the disk as a standalone
 QCOW2. It contains:
 
-- `Install-Omarchy-virt.zip`, the recommended small macOS download;
+- `install-Omarchy-virt.command`, used by the one-command macOS installer;
+- `Install-Omarchy-virt.zip`, the GUI-oriented alternative;
 - numbered `Omarchy-virt.utm.zip.part-*` payloads fetched by that installer;
 - the executable installer by itself for command-line users;
 - release/image manifests and SHA-256 checksums; and
 - image provenance and an archive of the exact package inventories.
+
+The primary user entry point always follows the latest verified Release:
+
+```bash
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
+```
 
 GitHub limits each Release asset to 2 GiB, while the compressed UTM bundle can
 be larger. The packager therefore streams the uncompressed ZIP directly into

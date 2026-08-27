@@ -1,30 +1,37 @@
-## Install on macOS with UTM
+## Quick install on macOS
 
 Requirements: a current UTM installation and at least 12 GB of free disk space
 while the bundle is downloaded and unpacked.
 
-1. Download **`Install-Omarchy-virt.zip`** from the Assets section below.
-2. Extract it and run **`install-Omarchy-virt.command`**.
-3. Wait while the installer downloads every image part, verifies each SHA-256
-   digest, reconstructs the UTM bundle, and opens it in UTM.
-4. Complete Omarchy's first-boot owner, keyboard, Git, hostname, and timezone
-   setup inside the VM.
+Open Terminal and run:
+
+```bash
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
+```
+
+The command fetches the small installer from the latest Release. It then
+downloads every image part, verifies each SHA-256 digest, reconstructs the UTM
+bundle, installs it as `~/Downloads/Omarchy-virt.utm`, and opens it in UTM.
+Complete Omarchy's owner, keyboard, Git, hostname, and timezone setup inside
+the VM.
+
+To choose a different parent directory:
+
+```bash
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/riverscn/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash -s -- "$1"' _ "/path/for/virtual-machines"
+```
+
+For a GUI-oriented alternative, download **`Install-Omarchy-virt.zip`** from
+the Assets section, extract it, and run **`install-Omarchy-virt.command`**. If
+macOS blocks the downloaded command, Control-click it, choose **Open**, and
+confirm once.
 
 Do not download the numbered `Omarchy-virt.utm.zip.part-*` assets manually.
 They are below GitHub's per-file size limit and are fetched automatically by
 the small installer.
 
-The VM is installed as `~/Downloads/Omarchy-virt.utm` by default. To choose a
-different parent directory, run the installer in Terminal with that directory
-as its only argument:
-
-```bash
-./install-Omarchy-virt.command "/path/for/virtual-machines"
-```
-
-If macOS blocks the downloaded command, Control-click it, choose **Open**, and
-confirm once. The script itself is readable in this Release and verifies all
-downloaded payloads before installation.
+The script itself is readable in this Release and verifies all downloaded
+payloads before installation.
 
 Each installation receives a new VM UUID, drive UUID, and locally administered
 MAC address. EFI variable storage is deliberately absent from the Release; UTM
