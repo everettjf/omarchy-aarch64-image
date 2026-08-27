@@ -105,6 +105,50 @@ The distributed image is intentionally unencrypted. Per-machine encryption
 requires an installer that creates a unique LUKS container rather than a shared
 key embedded in a reusable disk image.
 
+## GitHub and UTM releases
+
+The `Publish AArch64 UTM image` workflow builds on GitHub's native
+`ubuntu-24.04-arm` runner. It checks out the reviewed Omarchy source and native
+builder revisions recorded in `sources.env`, restores only the signed rootfs
+and Node.js download cache, builds the QCOW2, runs `qemu-img check`, and then
+creates a draft Release. The draft is published only after GitHub reports the
+same SHA-256 digest for every uploaded asset.
+
+Create a version tag such as `v4.0.1-virt.1`, or run the workflow manually and
+provide that tag. The Release does not duplicate the disk as a standalone
+QCOW2. It contains:
+
+- `Install-Omarchy-virt.zip`, the recommended small macOS download;
+- numbered `Omarchy-virt.utm.zip.part-*` payloads fetched by that installer;
+- the executable installer by itself for command-line users;
+- release/image manifests and SHA-256 checksums; and
+- image provenance and exact package inventories.
+
+GitHub limits each Release asset to 2 GiB, while the compressed UTM bundle can
+be larger. The packager therefore streams the uncompressed ZIP directly into
+1,900 MiB numbered parts without first writing another full archive. The
+macOS installer downloads and verifies every part, reconstructs and verifies
+the UTM bundle, installs it in `~/Downloads` by default, and opens it in UTM.
+An alternate destination directory can be passed as its first argument.
+
+The clean template lives under `utm/Omarchy-virt.utm`; the small icon is stored
+as base64 so the repository remains text-reviewable. No `efi_vars.fd`, saved
+state, logs, or disk image is versioned or copied from the template. Before
+opening the VM, the installer also generates new VM, drive, and locally
+administered MAC identities. UTM creates fresh AArch64 EFI variable storage on
+first launch, so firmware boot entries from the release builder cannot leak to
+users.
+
+For local release-layout testing after building an image:
+
+```bash
+./bin/package-utm-release --tag v4.0.1-virt.1
+```
+
+Set `OMARCHY_UTM_CONSUME_IMAGE=1` only in storage-constrained automation: after
+the archive stream has been split successfully, it removes that exact source
+QCOW2 and its checksum. Normal local packaging retains the image.
+
 ## Build
 
 Image assembly runs AArch64 target commands in a chroot and therefore requires

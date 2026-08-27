@@ -62,6 +62,7 @@ exec docker "${DOCKER_ARGS[@]}" \
   --workdir /project \
   --env "HOST_UID=$(id -u)" \
   --env "HOST_GID=$(id -g)" \
+  --env "OMARCHY_IMAGE_LOW_DISK=${OMARCHY_IMAGE_LOW_DISK:-0}" \
   "$BUILDER_IMAGE" \
   bash -lc '
     set -euo pipefail

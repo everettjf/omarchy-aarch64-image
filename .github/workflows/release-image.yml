@@ -1,0 +1,187 @@
+name: Publish AArch64 UTM image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create (for example v4.0.1-virt.1)
+        required: true
+        type: string
+
+concurrency:
+  group: aarch64-image-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    if: github.repository == 'riverscn/omarchy-aarch64-image'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout image source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve pinned build inputs
+        id: sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./sources.env
+          echo "omarchy_url=$OMARCHY_AARCH64_URL" >> "$GITHUB_OUTPUT"
+          echo "omarchy_ref=$OMARCHY_AARCH64_REF" >> "$GITHUB_OUTPUT"
+          echo "packages_url=$OMARCHY_PKGS_AARCH64_URL" >> "$GITHUB_OUTPUT"
+          echo "packages_ref=$OMARCHY_PKGS_AARCH64_REF" >> "$GITHUB_OUTPUT"
+          echo "cache_week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Omarchy source
+        uses: actions/checkout@v7
+        with:
+          repository: riverscn/omarchy-aarch64
+          ref: ${{ steps.sources.outputs.omarchy_ref }}
+          path: build/dependencies/omarchy-aarch64
+          persist-credentials: false
+
+      - name: Checkout pinned native builder source
+        uses: actions/checkout@v7
+        with:
+          repository: riverscn/omarchy-pkgs-aarch64
+          ref: ${{ steps.sources.outputs.packages_ref }}
+          path: build/dependencies/omarchy-pkgs-aarch64
+          persist-credentials: false
+
+      - name: Restore verified rolling inputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            build/cache/ArchLinuxARM-aarch64-latest.tar.gz
+            build/cache/ArchLinuxARM-aarch64-latest.tar.gz.sig
+            build/cache/archlinuxarm.gpg
+            build/cache/archlinuxarm-rootfs-*.gpg
+            build/cache/node-SHASUMS256.txt
+            build/cache/node-v*-linux-arm64.tar.gz
+          key: image-inputs-${{ runner.arch }}-${{ hashFiles('sources.env') }}-${{ steps.sources.outputs.cache_week }}
+
+      - name: Reclaim hosted-runner disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf -- \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet \
+            /opt/ghc
+          docker system prune --all --force --volumes
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends qemu-utils
+          df -h /
+
+      - name: Set up native Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the Arch Linux ARM image environment
+        uses: docker/build-push-action@v7
+        with:
+          context: build/dependencies/omarchy-pkgs-aarch64/build
+          platforms: linux/arm64
+          target: builder
+          tags: omarchy-pkg-builder:latest-aarch64-edge
+          load: true
+          cache-from: type=gha,scope=omarchy-aarch64-image-builder
+          cache-to: type=gha,scope=omarchy-aarch64-image-builder,mode=max
+
+      - name: Run release contracts
+        env:
+          OMARCHY_TEST_SOURCE: build/dependencies/omarchy-aarch64
+        run: ./tests/run
+
+      - name: Build and verify the QCOW2 image
+        env:
+          OMARCHY_IMAGE_LOW_DISK: '1'
+        run: |
+          set -euo pipefail
+          ./bin/build-image-container \
+            --omarchy-source build/dependencies/omarchy-aarch64 \
+            --force
+          qemu-img check build/omarchy-aarch64-virt.qcow2
+          (cd build && sha256sum --check omarchy-aarch64-virt.qcow2.sha256)
+          df -h /
+
+      - name: Resolve release tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag=$REQUESTED_TAG
+          else
+            tag=$REF_NAME
+          fi
+          [[ $tag =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Package split UTM release assets
+        env:
+          OMARCHY_UTM_CONSUME_IMAGE: '1'
+        run: |
+          set -euo pipefail
+          ./bin/package-utm-release \
+            --tag '${{ steps.release.outputs.tag }}' \
+            --output build/release-assets
+          find build/release-assets -maxdepth 1 -type f -size +2047M -print -quit |
+            grep -q . && {
+              echo 'A release asset exceeds GitHub’s 2 GiB limit.' >&2
+              exit 1
+            }
+          (cd build/release-assets && sha256sum --check SHA256SUMS)
+
+      - name: Create and verify draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_dir=build/release-assets
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          mapfile -t assets < <(find "$release_dir" -mindepth 1 -maxdepth 1 -type f -print | sort)
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "Omarchy AArch64 VM $RELEASE_TAG" \
+            --notes "A QEMU/UTM AArch64 virt image based on Omarchy 4.0.1. Download Install-Omarchy-virt.zip on macOS; its installer verifies and reconstructs the split UTM bundle, creates a new VM identity, and lets UTM initialize clean EFI variable storage." \
+            "${assets[@]}"
+
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$RELEASE_TAG\") | .id")
+          [[ $release_id =~ ^[0-9]+$ ]]
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+          while read -r checksum name; do
+            remote_digest=$(jq -r --arg name "$name" \
+              '.assets[] | select(.name == $name) | .digest' <<<"$release_json")
+            [[ $remote_digest == "sha256:$checksum" ]] || {
+              echo "Uploaded asset digest mismatch: $name" >&2
+              exit 1
+            }
+          done < <(cd "$release_dir" && sha256sum *)
+
+      - name: Publish verified Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
