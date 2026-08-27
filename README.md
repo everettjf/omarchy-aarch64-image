@@ -127,10 +127,11 @@ installation paths:
 - image provenance and an archive of the exact package inventories.
 - `install-Omarchy-ezvm.command`, the one-command EZVM installer;
 - `ezvm-release-manifest.json`; and
-- numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.0 or newer.
+- numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.1 or newer.
 
-The EZVM installer verifies every part, the compressed stream, the raw disk
-size, and the final raw-disk SHA-256 before invoking EZVM. The portable sparse
+The EZVM installer treats `ezvm-release-manifest.json` as its sole metadata
+source, verifies every part, the compressed stream, the raw disk size, and the
+final raw-disk SHA-256 before invoking `ezvm install-image`. The portable sparse
 stream records only allocated extents and recreates them at their exact disk
 offsets on macOS, keeping physical usage close to used data. EZVM then creates a
 new `.ezvm` machine, machine identifier, NVRAM store, and host-side

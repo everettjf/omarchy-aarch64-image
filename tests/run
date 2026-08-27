@@ -157,17 +157,26 @@ PY
   [[ -x $fixture/release/install-Omarchy-ezvm.command ]] ||
     fail "macOS EZVM installer is not executable"
   jq -e '
-    .schema == 1 and
-    .product == "omarchy-aarch64-ezvm" and
+    .schemaVersion == 1 and
+    .kind == "io.github.everettjf.ezvm.preinstalled-image" and
+    .product.id == "org.omarchy.aarch64" and
+    .product.version == "v4.0.1-test.1" and
     .architecture == "arm64" and
-    .minimum_ezvm_version == "5.0.0" and
+    .minimumEZVMVersion == "5.0.1" and
     .disk.format == "raw" and
-    .disk.compression == "ezvm-sparse-stream+gzip" and
-    (.disk.parts | length) > 0
+    (.disk.virtualSize | type == "number") and
+    (.disk.sha256 | test("^[0-9a-f]{64}$")) and
+    .archive.compression == "ezvm-sparse-stream+gzip" and
+    (.archive.parts | length) > 0 and
+    .virtualMachine.name == "Omarchy"
   ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
     fail "EZVM release manifest is invalid"
   grep -q 'decode-ezvm-sparse' "$fixture/release/install-Omarchy-ezvm.command" ||
     fail "EZVM installer does not embed the sparse stream decoder"
+  grep -Fq 'install-image "$manifest"' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not use the public install-image command"
+  ! grep -Fq "image_sha='" "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer still embeds a second copy of manifest checksums"
   pass "EZVM release packager produces verified split raw assets and installer"
 )
 

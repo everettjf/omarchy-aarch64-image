@@ -75,21 +75,27 @@ jq -n \
   --arg archive_sha256 "$archive_sha" --argjson archive_size "$archive_size" \
   --argjson parts "$parts_json" '
   {
-    schema: 1,
-    product: "omarchy-aarch64-ezvm",
+    schemaVersion: 1,
+    kind: "io.github.everettjf.ezvm.preinstalled-image",
     architecture: "arm64",
-    release: {repository: $repository, tag: $tag},
-    minimum_ezvm_version: "5.0.0",
+    minimumEZVMVersion: "5.0.1",
+    product: {id: "org.omarchy.aarch64", name: "Omarchy", version: $tag},
     disk: {
       format: "raw",
+      virtualSize: $image_size,
+      sha256: $image_sha256
+    },
+    archive: {
       compression: "ezvm-sparse-stream+gzip",
-      size: $image_size,
-      sha256: $image_sha256,
-      compressed_size: $archive_size,
-      compressed_sha256: $archive_sha256,
+      compressedSize: $archive_size,
+      sha256: $archive_sha256,
       parts: $parts
     },
-    virtual_machine: {name: "Omarchy", boot: "uefi", directory_sharing: "virtiofs"}
+    release: {repository: $repository, tag: $tag},
+    virtualMachine: {
+      name: "Omarchy",
+      remark: "Omarchy AArch64 preinstalled image"
+    }
   }' >"$OUTPUT_DIR/ezvm-release-manifest.json"
 
 installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
@@ -103,33 +109,52 @@ for command in awk cat curl dirname gzip jq mkdir mktemp open perl shasum stat; 
 done
 HEADER
   printf "repository='%s'\ntag='%s'\n" "$RELEASE_REPOSITORY" "$RELEASE_TAG"
-  printf "image_name='%s'\n" "$image_name"
-  printf "image_sha='%s'\nimage_size='%s'\narchive_sha='%s'\n" "$image_sha" "$image_size" "$archive_sha"
-  printf 'parts=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "${part##*/}"; done; printf ')\n'
-  printf 'part_sha=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "$(sha256sum "$part" | awk '{print $1}')"; done; printf ')\n'
   cat <<'BODY_START'
 destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
 [[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
 [[ ! -e $destination ]] || fail "destination already exists: $destination"
-app_exec=${EZVM_APP_EXECUTABLE:-/Applications/EZVM.app/Contents/MacOS/EZVM}
-[[ -x $app_exec ]] || fail "EZVM 5.0.0 or newer is required in /Applications"
+ezvm_bin=${EZVM_CLI_EXECUTABLE:-$(command -v ezvm || true)}
+[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 5.0.1 or newer must be installed with Homebrew"
 work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
+base_url=${OMARCHY_EZVM_RELEASE_BASE_URL:-"https://github.com/$repository/releases/download/$tag"}
+manifest="$work/ezvm-release-manifest.json"
+curl --fail --location --retry 3 --output "$manifest" "$base_url/ezvm-release-manifest.json"
+jq -e '
+  .schemaVersion == 1 and
+  .kind == "io.github.everettjf.ezvm.preinstalled-image" and
+  .architecture == "arm64" and
+  .disk.format == "raw" and
+  (.disk.virtualSize | type == "number") and
+  (.disk.sha256 | test("^[0-9a-f]{64}$")) and
+  .archive.compression == "ezvm-sparse-stream+gzip" and
+  (.archive.sha256 | test("^[0-9a-f]{64}$")) and
+  (.archive.parts | type == "array" and length > 0) and
+  all(.archive.parts[]; (.name | test("^[A-Za-z0-9._-]+$")) and (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$")))
+' "$manifest" >/dev/null || fail "release manifest is invalid or unsupported"
+image_name='Omarchy-ezvm.raw'
+image_sha=$(jq -r '.disk.sha256' "$manifest")
+image_size=$(jq -r '.disk.virtualSize' "$manifest")
+archive_sha=$(jq -r '.archive.sha256' "$manifest")
 decoder="$work/decode-ezvm-sparse"
 cat >"$decoder" <<'EZVM_SPARSE_DECODER'
 BODY_START
   cat "$PROJECT_ROOT/bin/decode-ezvm-sparse"
   cat <<'BODY'
 EZVM_SPARSE_DECODER
-base_url="https://github.com/$repository/releases/download/$tag"
 downloaded=()
-for index in "${!parts[@]}"; do
-  name=${parts[$index]}
-  printf 'Downloading %s (%d/%d)…\n' "$name" "$((index + 1))" "${#parts[@]}"
+part_count=$(jq '.archive.parts | length' "$manifest")
+for ((index = 0; index < part_count; index++)); do
+  name=$(jq -r ".archive.parts[$index].name" "$manifest")
+  expected_size=$(jq -r ".archive.parts[$index].size" "$manifest")
+  expected_sha=$(jq -r ".archive.parts[$index].sha256" "$manifest")
+  printf 'Downloading %s (%d/%d)…\n' "$name" "$((index + 1))" "$part_count"
   curl --fail --location --retry 3 --output "$work/$name" "$base_url/$name"
+  actual_size=$(stat -f %z "$work/$name")
+  [[ $actual_size == "$expected_size" ]] || fail "size mismatch: $name"
   actual=$(shasum -a 256 "$work/$name" | awk '{print $1}')
-  [[ $actual == "${part_sha[$index]}" ]] || fail "checksum mismatch: $name"
+  [[ $actual == "$expected_sha" ]] || fail "checksum mismatch: $name"
   downloaded+=("$work/$name")
 done
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
@@ -142,8 +167,8 @@ actual_size=$(stat -f %z "$raw")
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')
 [[ $actual == "$image_sha" ]] || fail "raw image checksum mismatch"
 mkdir -p "$(dirname "$destination")"
-"$app_exec" --ezvm-install-linux-image "$raw" --destination "$destination" --name Omarchy
-open -a EZVM
+"$ezvm_bin" install-image "$manifest" --image "$raw" --destination "$destination" --timeout 300
+if [[ ${OMARCHY_EZVM_SKIP_OPEN:-0} != 1 ]]; then open -a EZVM; fi
 printf '\nInstalled Omarchy for EZVM: %s\n' "$destination"
 BODY
 } >"$installer"
