@@ -154,7 +154,7 @@ PY
     .architecture == "arm64" and
     .minimum_ezvm_version == "5.0.0" and
     .disk.format == "raw" and
-    .disk.compression == "gzip" and
+    .disk.compression == "sparse-tar+gzip" and
     (.disk.parts | length) > 0
   ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
     fail "EZVM release manifest is invalid"

@@ -27,26 +27,33 @@ done
 [[ -f $IMAGE_PATH ]] || fail "raw image not found: $IMAGE_PATH"
 [[ $PART_SIZE_MIB =~ ^[0-9]+$ ]] && ((PART_SIZE_MIB > 0 && PART_SIZE_MIB < 2048)) ||
   fail "part size must be between 1 and 2047 MiB"
-for command in awk cat dirname find gzip install jq mkdir sed sha256sum split stat; do
+for command in awk cat dirname find gzip install jq mkdir sed sha256sum split stat tar; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
 
 mkdir -p "$OUTPUT_DIR"
-prefix="$OUTPUT_DIR/Omarchy-ezvm.raw.gz.part-"
+prefix="$OUTPUT_DIR/Omarchy-ezvm.raw.tar.gz.part-"
 rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
   "$OUTPUT_DIR/ezvm-release-manifest.json"
 
-printf 'Compressing and splitting the EZVM raw image…\n'
-gzip -1 -c -- "$IMAGE_PATH" |
+printf 'Archiving the sparse EZVM raw image, compressing, and splitting…\n'
+if tar --help 2>&1 | grep -q -- '--sparse'; then
+  tar --sparse -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
+else
+  tar -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
+fi |
+  gzip -1 |
   split -d -a 2 -b "${PART_SIZE_MIB}m" - "$prefix"
 
 parts=()
 while IFS= read -r part; do parts+=("$part"); done < <(
-  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.raw.gz.part-*' -print | sort
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.raw.tar.gz.part-*' -print | sort
 )
 ((${#parts[@]} > 0)) || fail "compression produced no parts"
 image_sha=$(sha256sum "$IMAGE_PATH" | awk '{print $1}')
 image_size=$(file_size "$IMAGE_PATH")
+image_name=${IMAGE_PATH##*/}
+[[ $image_name =~ ^[A-Za-z0-9._-]+$ ]] || fail "image filename contains unsupported characters"
 archive_sha=$(cat -- "${parts[@]}" | sha256sum | awk '{print $1}')
 archive_size=0
 parts_json='[]'
@@ -72,7 +79,7 @@ jq -n \
     minimum_ezvm_version: "5.0.0",
     disk: {
       format: "raw",
-      compression: "gzip",
+      compression: "sparse-tar+gzip",
       size: $image_size,
       sha256: $image_sha256,
       compressed_size: $archive_size,
@@ -88,11 +95,12 @@ installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
 #!/bin/bash
 set -euo pipefail
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat; do
+for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat tar; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required macOS command: $command"
 done
 HEADER
   printf "repository='%s'\ntag='%s'\n" "$RELEASE_REPOSITORY" "$RELEASE_TAG"
+  printf "image_name='%s'\n" "$image_name"
   printf "image_sha='%s'\nimage_size='%s'\narchive_sha='%s'\n" "$image_sha" "$image_size" "$archive_sha"
   printf 'parts=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "${part##*/}"; done; printf ')\n'
   printf 'part_sha=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "$(sha256sum "$part" | awk '{print $1}')"; done; printf ')\n'
@@ -117,8 +125,9 @@ for index in "${!parts[@]}"; do
 done
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
 [[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
-raw="$work/Omarchy.raw"
-cat "${downloaded[@]}" | gzip -dc >"$raw"
+cat "${downloaded[@]}" | gzip -dc | tar -xf - -C "$work"
+raw="$work/$image_name"
+[[ -f $raw ]] || fail "sparse archive did not contain the expected raw image"
 actual_size=$(stat -f %z "$raw")
 [[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')

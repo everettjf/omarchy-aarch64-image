@@ -127,10 +127,12 @@ installation paths:
 - image provenance and an archive of the exact package inventories.
 - `install-Omarchy-ezvm.command`, the one-command EZVM installer;
 - `ezvm-release-manifest.json`; and
-- numbered gzip-compressed raw-image parts for EZVM 5.0.0 or newer.
+- numbered gzip-compressed sparse-tar parts for EZVM 5.0.0 or newer.
 
 The EZVM installer verifies every part, the compressed stream, the raw disk
-size, and the final raw-disk SHA-256 before invoking EZVM. EZVM then creates a
+size, and the final raw-disk SHA-256 before invoking EZVM. The sparse archive
+keeps the installed disk's physical footprint close to its used data instead
+of expanding every empty block. EZVM then creates a
 new `.ezvm` machine, machine identifier, NVRAM store, and host-side
 configuration. The published image contains no reusable host identity or EFI
 variable storage.
