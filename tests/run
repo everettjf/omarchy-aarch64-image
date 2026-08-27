@@ -70,6 +70,7 @@ pass "UTM template is a clean AArch64 virt configuration without EFI state"
   for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
     printf 'test metadata\n' >"$fixture/test.$suffix"
   done
+  : >"$fixture/test.orphans.txt"
 
   OMARCHY_UTM_PART_SIZE_MIB=1 "$ROOT/bin/package-utm-release" \
     --tag v4.0.1-test.1 \
@@ -90,14 +91,15 @@ pass "UTM template is a clean AArch64 virt configuration without EFI state"
     fail "the reconstructed UTM archive checksum is invalid"
 
   python3 - "$fixture/Omarchy-virt.utm.zip" "$fixture/release/release-manifest.json" \
-    "$fixture/release/Install-Omarchy-virt.zip" <<'PY'
+    "$fixture/release/Install-Omarchy-virt.zip" \
+    "$fixture/release/image-package-inventory.zip" <<'PY'
 import json
 import plistlib
 import stat
 import sys
 import zipfile
 
-archive_path, manifest_path, installer_path = sys.argv[1:]
+archive_path, manifest_path, installer_path, inventory_path = sys.argv[1:]
 with zipfile.ZipFile(archive_path) as archive:
     names = set(archive.namelist())
     assert "Omarchy-virt.utm/config.plist" in names
@@ -118,7 +120,18 @@ with zipfile.ZipFile(installer_path) as archive:
     info = archive.getinfo("install-Omarchy-virt.command")
     mode = info.external_attr >> 16
     assert mode & stat.S_IXUSR
+
+with zipfile.ZipFile(inventory_path) as archive:
+    assert set(archive.namelist()) == {
+        "all-packages.txt",
+        "explicit-packages.txt",
+        "packages.tsv",
+        "orphans.txt",
+    }
 PY
+  if find "$fixture/release" -maxdepth 1 -type f -empty -print -quit | grep -q .; then
+    fail "the release contains a zero-byte asset rejected by GitHub"
+  fi
   pass "UTM release packager produces verified split assets and installer"
 )
 

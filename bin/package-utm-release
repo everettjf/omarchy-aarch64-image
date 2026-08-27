@@ -340,12 +340,20 @@ write_checksums() {
 
 copy_image_metadata() {
   local manifest_base=${IMAGE_PATH%.qcow2}
+  local inventory_stage
 
   install -m644 "$PROVENANCE_PATH" "$OUTPUT_DIR/image-provenance.txt"
-  install -m644 "$manifest_base.all-packages.txt" "$OUTPUT_DIR/all-packages.txt"
-  install -m644 "$manifest_base.explicit-packages.txt" "$OUTPUT_DIR/explicit-packages.txt"
-  install -m644 "$manifest_base.packages.tsv" "$OUTPUT_DIR/packages.tsv"
-  install -m644 "$manifest_base.orphans.txt" "$OUTPUT_DIR/orphans.txt"
+  inventory_stage=$(mktemp -d "$OUTPUT_DIR/.package-inventory.XXXXXX")
+  install -m644 "$manifest_base.all-packages.txt" "$inventory_stage/all-packages.txt"
+  install -m644 "$manifest_base.explicit-packages.txt" "$inventory_stage/explicit-packages.txt"
+  install -m644 "$manifest_base.packages.tsv" "$inventory_stage/packages.tsv"
+  install -m644 "$manifest_base.orphans.txt" "$inventory_stage/orphans.txt"
+  (
+    cd -- "$inventory_stage"
+    zip -9 -q "$OUTPUT_DIR/image-package-inventory.zip" \
+      all-packages.txt explicit-packages.txt packages.tsv orphans.txt
+  )
+  rm -rf -- "$inventory_stage"
 }
 
 main() {
@@ -383,6 +391,10 @@ main() {
   write_installer "$archive_sha" "${parts[@]}"
   write_manifest "$image_sha" "$image_size" "$archive_sha" "$archive_size" "${parts[@]}"
   write_checksums
+  if find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type f -empty -print -quit |
+    grep -q .; then
+    fail "GitHub Release assets must not be empty"
+  fi
 
   log "Prepared ${#parts[@]} UTM archive part(s) in $OUTPUT_DIR"
   log "Users should download $INSTALLER_ARCHIVE_NAME and run $INSTALLER_NAME on macOS"

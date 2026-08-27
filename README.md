@@ -122,7 +122,7 @@ QCOW2. It contains:
 - numbered `Omarchy-virt.utm.zip.part-*` payloads fetched by that installer;
 - the executable installer by itself for command-line users;
 - release/image manifests and SHA-256 checksums; and
-- image provenance and exact package inventories.
+- image provenance and an archive of the exact package inventories.
 
 GitHub limits each Release asset to 2 GiB, while the compressed UTM bundle can
 be larger. The packager therefore streams the uncompressed ZIP directly into
