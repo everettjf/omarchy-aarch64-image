@@ -127,7 +127,7 @@ installation paths:
 - image provenance and an archive of the exact package inventories.
 - `install-Omarchy-ezvm.command`, the one-command EZVM installer;
 - `ezvm-release-manifest.json`; and
-- numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.1 or newer.
+- numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.3 or newer.
 
 The EZVM installer treats `ezvm-release-manifest.json` as its sole metadata
 source, verifies every part, the compressed stream, the raw disk size, and the

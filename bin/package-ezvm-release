@@ -78,7 +78,7 @@ jq -n \
     schemaVersion: 1,
     kind: "io.github.everettjf.ezvm.preinstalled-image",
     architecture: "arm64",
-    minimumEZVMVersion: "5.0.1",
+    minimumEZVMVersion: "5.0.3",
     product: {id: "org.omarchy.aarch64", name: "Omarchy", version: $tag},
     disk: {
       format: "raw",
@@ -114,7 +114,7 @@ destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
 [[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
 [[ ! -e $destination ]] || fail "destination already exists: $destination"
 ezvm_bin=${EZVM_CLI_EXECUTABLE:-$(command -v ezvm || true)}
-[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 5.0.1 or newer must be installed with Homebrew"
+[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 5.0.3 or newer must be installed with Homebrew"
 work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
