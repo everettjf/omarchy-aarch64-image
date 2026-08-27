@@ -453,7 +453,7 @@ resolve_omarchy_repository() {
     OMARCHY_BUILD_REPOSITORY_URL=$OMARCHY_AARCH64_REPOSITORY_URL
   fi
 
-  validate_omarchy_repository_manifest
+  validate_omarchy_repository_manifest "$OMARCHY_REPOSITORY_MANIFEST"
   verify_omarchy_repository_key
   log "Verified signed Omarchy AArch64 repository snapshot from $OMARCHY_REPOSITORY_GENERATED_AT"
 }
@@ -832,7 +832,14 @@ install_packages() {
   local package
   local -a official_packages=() repo_install_packages=()
 
-  mapfile -t official_packages < <(resolve_official_packages)
+  mapfile -t official_packages < <(
+    resolve_official_packages \
+      "$OMARCHY_SOURCE_DIR/install/omarchy-base.packages" \
+      "$CONFIG_DIR/omarchy-packages.aarch64" \
+      "$PROFILE_DIR/excluded-packages" \
+      "$PROFILE_DIR/package-replacements" \
+      "$PROFILE_DIR/runtime-packages"
+  )
   ((${#official_packages[@]} > 0)) || fail "resolved official package set is empty"
   while IFS= read -r package; do
     case $package in
