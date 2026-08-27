@@ -424,6 +424,8 @@ grep -Fq 'qemu-img check build/omarchy-aarch64-virt.qcow2' \
 if grep -Fq 'actions/upload-artifact' "$ROOT/.github/workflows/release-image.yml"; then
   fail "the multi-gigabyte image is copied through Actions artifact storage"
 fi
+grep -Fq 'uses: actions/cache/save@v6' "$ROOT/.github/workflows/release-image.yml" ||
+  fail "verified rolling inputs are only cached after the entire Release succeeds"
 grep -Fq 'efi_variable_storage: "omitted-and-created-by-utm"' \
   "$ROOT/bin/package-utm-release" ||
   fail "UTM release metadata does not promise clean firmware state"
