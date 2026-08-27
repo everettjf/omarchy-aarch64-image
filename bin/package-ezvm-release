@@ -12,7 +12,12 @@ RELEASE_REPOSITORY=${OMARCHY_EZVM_RELEASE_REPOSITORY:-everettjf/omarchy-aarch64-
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 absolute_existing_path() { (cd -- "$(dirname -- "$1")" && printf '%s/%s\n' "$PWD" "$(basename -- "$1")"); }
 absolute_directory() { mkdir -p -- "$1"; (cd -- "$1" && printf '%s\n' "$PWD"); }
-file_size() { stat -f %z "$1" 2>/dev/null || stat --format=%s "$1"; }
+file_size() {
+  local size
+  size=$(stat --format=%s "$1" 2>/dev/null) || size=$(stat -f %z "$1")
+  [[ $size =~ ^[0-9]+$ ]] || fail "could not determine file size: $1"
+  printf '%s\n' "$size"
+}
 
 while (($#)); do
   case $1 in
