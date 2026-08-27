@@ -30,8 +30,10 @@ done
 
 [[ $RELEASE_TAG =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "a valid --tag is required"
 [[ -f $IMAGE_PATH ]] || fail "raw image not found: $IMAGE_PATH"
-[[ $PART_SIZE_MIB =~ ^[0-9]+$ ]] && ((PART_SIZE_MIB > 0 && PART_SIZE_MIB < 2048)) ||
+if [[ ! $PART_SIZE_MIB =~ ^[0-9]+$ ]] ||
+  ((PART_SIZE_MIB <= 0 || PART_SIZE_MIB >= 2048)); then
   fail "part size must be between 1 and 2047 MiB"
+fi
 for command in awk cat dirname find gzip install jq mkdir sed sha256sum split stat tar; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
