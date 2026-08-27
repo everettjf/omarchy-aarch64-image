@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+
+import errno
+import os
+import pathlib
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"Error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+if len(sys.argv) != 2:
+    fail("usage: encode-ezvm-sparse RAW_IMAGE")
+
+path = pathlib.Path(sys.argv[1])
+if not path.is_file():
+    fail(f"raw image not found: {path}")
+
+output = sys.stdout.buffer
+with path.open("rb", buffering=0) as source:
+    size = os.fstat(source.fileno()).st_size
+    output.write(b"EZVM-SPARSE-1\n")
+    output.write(f"{size}\n".encode("ascii"))
+    position = 0
+    while position < size:
+        try:
+            data_offset = os.lseek(source.fileno(), position, os.SEEK_DATA)
+        except OSError as error:
+            if error.errno == errno.ENXIO:
+                break
+            raise
+        hole_offset = os.lseek(source.fileno(), data_offset, os.SEEK_HOLE)
+        length = min(hole_offset, size) - data_offset
+        output.write(f"{data_offset} {length}\n".encode("ascii"))
+        os.lseek(source.fileno(), data_offset, os.SEEK_SET)
+        remaining = length
+        while remaining:
+            chunk = source.read(min(1024 * 1024, remaining))
+            if not chunk:
+                fail("raw image ended inside a declared data extent")
+            output.write(chunk)
+            remaining -= len(chunk)
+        output.write(b"\n")
+        position = hole_offset
+    output.write(b"END\n")
+

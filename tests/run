@@ -23,7 +23,11 @@ pass() {
 }
 
 while IFS= read -r script; do
-  bash -n "$script" || fail "bash syntax: ${script#$ROOT/}"
+  case $(head -1 "$script") in
+    *python*) python3 -m py_compile "$script" || fail "Python syntax: ${script#$ROOT/}" ;;
+    *perl*) perl -c "$script" || fail "Perl syntax: ${script#$ROOT/}" ;;
+    *) bash -n "$script" || fail "Bash syntax: ${script#$ROOT/}" ;;
+  esac
 done < <(find "$ROOT/bin" -type f -print; find "$ROOT/profiles" -type f -perm /111 -print)
 bash -n "$OMARCHY_TEST_SOURCE/install/user/mise-work.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/hardware/all.sh"
@@ -158,17 +162,21 @@ PY
     .architecture == "arm64" and
     .minimum_ezvm_version == "5.0.0" and
     .disk.format == "raw" and
-    .disk.compression == "sparse-tar+gzip" and
+    .disk.compression == "ezvm-sparse-stream+gzip" and
     (.disk.parts | length) > 0
   ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
     fail "EZVM release manifest is invalid"
-  grep -q 'tar -xf -' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not extract the PAX sparse archive directly"
+  grep -q 'decode-ezvm-sparse' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not embed the sparse stream decoder"
   pass "EZVM release packager produces verified split raw assets and installer"
 )
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$ROOT"/bin/* "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root
+  bash_scripts=()
+  while IFS= read -r script; do
+    [[ $(head -1 "$script") == *bash* ]] && bash_scripts+=("$script")
+  done < <(find "$ROOT/bin" -type f -print)
+  shellcheck "${bash_scripts[@]}" "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root
   pass "project scripts pass shellcheck"
 fi
 

@@ -1,0 +1,55 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Fcntl qw(SEEK_SET);
+
+my $destination = shift @ARGV or die "usage: decode-ezvm-sparse OUTPUT_RAW\n";
+binmode STDIN;
+open my $output, '>', $destination or die "open $destination: $!\n";
+binmode $output;
+
+sub read_line {
+    my $line = '';
+    while (1) {
+        my $count = sysread(STDIN, my $byte, 1);
+        defined($count) or die "read sparse stream: $!\n";
+        return undef if $count == 0 && $line eq '';
+        $count == 1 or die "sparse stream ended inside a header\n";
+        $line .= $byte;
+        return $line if $byte eq "\n";
+        length($line) <= 128 or die "sparse stream header is too long\n";
+    }
+}
+
+my $magic = read_line() // die "missing sparse stream header\n";
+$magic eq "EZVM-SPARSE-1\n" or die "invalid sparse stream header\n";
+my $size_line = read_line() // die "missing sparse stream size\n";
+$size_line =~ /^([0-9]+)\n$/ or die "invalid sparse stream size\n";
+my $logical_size = $1;
+truncate($output, $logical_size) or die "truncate $destination: $!\n";
+
+while (defined(my $extent = read_line())) {
+    last if $extent eq "END\n";
+    $extent =~ /^([0-9]+) ([0-9]+)\n$/ or die "invalid sparse extent header\n";
+    my ($offset, $remaining) = ($1, $2);
+    $offset + $remaining <= $logical_size or die "sparse extent exceeds logical size\n";
+    sysseek($output, $offset, SEEK_SET) == $offset or die "seek $destination: $!\n";
+    while ($remaining > 0) {
+        my $wanted = $remaining > 1024 * 1024 ? 1024 * 1024 : $remaining;
+        my $read = sysread(STDIN, my $buffer, $wanted);
+        defined($read) && $read > 0 or die "sparse stream ended inside an extent\n";
+        my $written = 0;
+        while ($written < $read) {
+            my $count = syswrite($output, $buffer, $read - $written, $written);
+            defined($count) && $count > 0 or die "write $destination: $!\n";
+            $written += $count;
+        }
+        $remaining -= $read;
+    }
+    my $separator = '';
+    sysread(STDIN, $separator, 1) == 1 && $separator eq "\n"
+        or die "missing sparse extent separator\n";
+}
+
+close $output or die "close $destination: $!\n";

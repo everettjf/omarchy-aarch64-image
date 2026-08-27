@@ -34,28 +34,23 @@ if [[ ! $PART_SIZE_MIB =~ ^[0-9]+$ ]] ||
   ((PART_SIZE_MIB <= 0 || PART_SIZE_MIB >= 2048)); then
   fail "part size must be between 1 and 2047 MiB"
 fi
-for command in awk cat dirname find gzip install jq mkdir sed sha256sum split stat tar; do
+for command in awk cat dirname find gzip install jq mkdir python3 sed sha256sum split stat; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
 
 mkdir -p "$OUTPUT_DIR"
-prefix="$OUTPUT_DIR/Omarchy-ezvm.raw.tar.gz.part-"
+prefix="$OUTPUT_DIR/Omarchy-ezvm.sparse.gz.part-"
 rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
   "$OUTPUT_DIR/ezvm-release-manifest.json"
 
-printf 'Archiving the sparse EZVM raw image, compressing, and splitting…\n'
-if tar --help 2>&1 | grep -q -- '--sparse'; then
-  tar --format=pax --sparse --sparse-version=1.0 \
-    -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
-else
-  tar -C "$(dirname -- "$IMAGE_PATH")" -cf - "$(basename -- "$IMAGE_PATH")"
-fi |
+printf 'Encoding the EZVM sparse stream, compressing, and splitting…\n'
+"$PROJECT_ROOT/bin/encode-ezvm-sparse" "$IMAGE_PATH" |
   gzip -1 |
   split -d -a 2 -b "${PART_SIZE_MIB}m" - "$prefix"
 
 parts=()
 while IFS= read -r part; do parts+=("$part"); done < <(
-  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.raw.tar.gz.part-*' -print | sort
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.sparse.gz.part-*' -print | sort
 )
 ((${#parts[@]} > 0)) || fail "compression produced no parts"
 image_sha=$(sha256sum "$IMAGE_PATH" | awk '{print $1}')
@@ -87,7 +82,7 @@ jq -n \
     minimum_ezvm_version: "5.0.0",
     disk: {
       format: "raw",
-      compression: "sparse-tar+gzip",
+      compression: "ezvm-sparse-stream+gzip",
       size: $image_size,
       sha256: $image_sha256,
       compressed_size: $archive_size,
@@ -103,7 +98,7 @@ installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
 #!/bin/bash
 set -euo pipefail
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-for command in awk cat curl dirname gzip jq mkdir mktemp open shasum stat tar; do
+for command in awk cat curl dirname gzip jq mkdir mktemp open perl shasum stat; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required macOS command: $command"
 done
 HEADER
@@ -112,7 +107,7 @@ HEADER
   printf "image_sha='%s'\nimage_size='%s'\narchive_sha='%s'\n" "$image_sha" "$image_size" "$archive_sha"
   printf 'parts=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "${part##*/}"; done; printf ')\n'
   printf 'part_sha=(\n'; for part in "${parts[@]}"; do printf "  '%s'\n" "$(sha256sum "$part" | awk '{print $1}')"; done; printf ')\n'
-  cat <<'BODY'
+  cat <<'BODY_START'
 destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
 [[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
 [[ ! -e $destination ]] || fail "destination already exists: $destination"
@@ -121,6 +116,12 @@ app_exec=${EZVM_APP_EXECUTABLE:-/Applications/EZVM.app/Contents/MacOS/EZVM}
 work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
+decoder="$work/decode-ezvm-sparse"
+cat >"$decoder" <<'EZVM_SPARSE_DECODER'
+BODY_START
+  cat "$PROJECT_ROOT/bin/decode-ezvm-sparse"
+  cat <<'BODY'
+EZVM_SPARSE_DECODER
 base_url="https://github.com/$repository/releases/download/$tag"
 downloaded=()
 for index in "${!parts[@]}"; do
@@ -134,7 +135,7 @@ done
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
 [[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
 raw="$work/$image_name"
-cat "${downloaded[@]}" | gzip -dc | tar -xf - -C "$work"
+cat "${downloaded[@]}" | gzip -dc | perl "$decoder" "$raw"
 [[ -f $raw ]] || fail "sparse archive did not produce the expected raw image"
 actual_size=$(stat -f %z "$raw")
 [[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
