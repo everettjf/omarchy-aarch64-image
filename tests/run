@@ -426,6 +426,9 @@ if grep -Fq 'actions/upload-artifact' "$ROOT/.github/workflows/release-image.yml
 fi
 grep -Fq 'uses: actions/cache/save@v6' "$ROOT/.github/workflows/release-image.yml" ||
   fail "verified rolling inputs are only cached after the entire Release succeeds"
+grep -Fq -- '--notes-file RELEASE_NOTES.md' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'Download **`Install-Omarchy-virt.zip`**' "$ROOT/RELEASE_NOTES.md" ||
+  fail "GitHub Releases do not explain the installer-first workflow"
 grep -Fq 'efi_variable_storage: "omitted-and-created-by-utm"' \
   "$ROOT/bin/package-utm-release" ||
   fail "UTM release metadata does not promise clean firmware state"

@@ -180,7 +180,7 @@ jobs:
             --draft \
             --target "$GITHUB_SHA" \
             --title "Omarchy AArch64 VM $RELEASE_TAG" \
-            --notes "A QEMU/UTM AArch64 virt image based on Omarchy 4.0.1. Download Install-Omarchy-virt.zip on macOS; its installer verifies and reconstructs the split UTM bundle, creates a new VM identity, and lets UTM initialize clean EFI variable storage." \
+            --notes-file RELEASE_NOTES.md \
             "${assets[@]}"
 
           release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
