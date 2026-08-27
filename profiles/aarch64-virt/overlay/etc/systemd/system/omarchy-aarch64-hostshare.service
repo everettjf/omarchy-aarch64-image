@@ -1,7 +1,7 @@
 [Unit]
 Description=Map the QEMU host share to the Omarchy desktop owner
-After=remote-fs.target omarchy-provision-owner.service
-Wants=remote-fs.target
+After=omarchy-provision-owner.service mnt-hostshare.mount
+Wants=mnt-hostshare.mount
 Before=display-manager.service
 ConditionPathIsMountPoint=/mnt/hostshare
 

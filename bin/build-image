@@ -1137,9 +1137,12 @@ validate_target() {
     fail "target validation failed: /mnt/hostshare does not have mode 0755"
   bash -n "$MOUNT_DIR/usr/lib/omarchy-aarch64/setup-hostshare" ||
     fail "target validation failed: the hostshare setup helper has invalid shell syntax"
-  grep -qxF 'After=remote-fs.target omarchy-provision-owner.service' \
+  grep -qxF 'After=omarchy-provision-owner.service mnt-hostshare.mount' \
     "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-    fail "target validation failed: hostshare mapping can run before owner provisioning"
+    fail "target validation failed: hostshare mapping does not wait for owner and raw mount"
+  grep -qxF 'Wants=mnt-hostshare.mount' \
+    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+    fail "target validation failed: hostshare mapping does not pull in the raw mount"
   grep -qxF 'Before=display-manager.service' \
     "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
     fail "target validation failed: hostshare mapping can run after desktop login"

@@ -394,9 +394,12 @@ bash -c '
 grep -Fq 'target="$home/Hostshare"' \
   "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
   fail "the mapped host share does not use the generic Hostshare name"
-grep -Fq 'After=remote-fs.target omarchy-provision-owner.service' \
+grep -Fq 'After=omarchy-provision-owner.service mnt-hostshare.mount' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-  fail "the hostshare mapper is not ordered after first-boot owner provisioning"
+  fail "the hostshare mapper does not wait for owner provisioning and the raw mount"
+grep -Fq 'Wants=mnt-hostshare.mount' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+  fail "the hostshare mapper does not pull the raw 9p mount into its transaction"
 grep -Fq 'Before=display-manager.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
   fail "the hostshare mapper does not finish before desktop login"
