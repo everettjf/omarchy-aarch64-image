@@ -113,7 +113,7 @@ fi
       fail "aarch64-virt still excludes an upstream development package: $package"
     fi
   done
-  for package in dotnet-runtime-bin obsidian pinta tensaku tzupdate ufw-docker tobi-try; do
+  for package in bindfs dotnet-runtime-bin obsidian pinta tensaku tzupdate ufw-docker tobi-try; do
     grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
       fail "required Omarchy repository package is not selected: $package"
   done
@@ -280,6 +280,23 @@ grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
 grep -Fq 'share            /mnt/hostshare     9p     trans=virtio,version=9p2000.L,rw,_netdev,nofail,auto 0 0' \
   "$ROOT/bin/build-image" ||
   fail "the image does not preconfigure QEMU host directory sharing"
+bash -n "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
+  fail "the hostshare UID/GID mapping helper has invalid shell syntax"
+bash -c '
+  source "$1"
+  [[ $(build_mapping 501 20 1000 1000) == "501/1000:@20/@1000" ]]
+  [[ -z $(build_mapping 1000 1000 1000 1000) ]]
+' _ "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
+  fail "the hostshare helper does not derive UID/GID mappings dynamically"
+grep -Fq 'target="$home/Hostshare"' \
+  "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
+  fail "the mapped host share does not use the generic Hostshare name"
+grep -Fq 'After=remote-fs.target omarchy-provision-owner.service' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+  fail "the hostshare mapper is not ordered after first-boot owner provisioning"
+grep -Fq 'Before=display-manager.service' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+  fail "the hostshare mapper does not finish before desktop login"
 grep -Fq 'kernel/fs/9p/9p.ko' "$ROOT/bin/build-image" ||
   fail "image validation does not require 9p filesystem support"
 grep -Fq 'kernel/net/9p/9pnet_virtio.ko' "$ROOT/bin/build-image" ||

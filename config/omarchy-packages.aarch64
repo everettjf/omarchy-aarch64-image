@@ -1,4 +1,5 @@
 # Packages installed and updated from the signed [omarchy] AArch64 repository.
+bindfs
 omarchy-aarch64-keyring
 omarchy-keyring
 limine-mkinitcpio-hook

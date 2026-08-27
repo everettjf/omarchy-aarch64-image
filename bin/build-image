@@ -888,6 +888,7 @@ EOF
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
+  chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/setup-hostshare"
   install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
   printf '%s\n' "$IMAGE_PROFILE" >"$MOUNT_DIR/etc/omarchy-aarch64/profile"
   read_list "$PROFILE_DIR/excluded-packages" \
@@ -895,6 +896,7 @@ EOF
   read_list "$CONFIG_DIR/omarchy-packages.aarch64" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
+  target_chroot systemctl enable omarchy-aarch64-hostshare.service
 }
 
 apply_profile_shell_defaults() {
@@ -1089,6 +1091,7 @@ validate_target() {
     etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository
     etc/snapper/configs/root
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
+    etc/systemd/system/multi-user.target.wants/omarchy-aarch64-hostshare.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
     usr/bin/omarchy-provision-owner
     usr/bin/limine-mkinitcpio
@@ -1097,6 +1100,7 @@ validate_target() {
     usr/lib/systemd/user/graphical-session.target.wants/spice-guest-tools-bootstrap.service
     usr/lib/systemd/user/spice-clipboard-bridge.service
     usr/lib/systemd/user/spice-display-bridge.service
+    usr/lib/omarchy-aarch64/setup-hostshare
     usr/share/omarchy-aarch64/repository-manifest.json
     usr/share/pacman/keyrings/omarchy-aarch64.gpg
     usr/share/omarchy/version
@@ -1124,6 +1128,14 @@ validate_target() {
     fail "target validation failed: QEMU host sharing is not configured with the share tag"
   [[ $(stat -c '%a' "$MOUNT_DIR/mnt/hostshare") == 755 ]] ||
     fail "target validation failed: /mnt/hostshare does not have mode 0755"
+  bash -n "$MOUNT_DIR/usr/lib/omarchy-aarch64/setup-hostshare" ||
+    fail "target validation failed: the hostshare setup helper has invalid shell syntax"
+  grep -qxF 'After=remote-fs.target omarchy-provision-owner.service' \
+    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+    fail "target validation failed: hostshare mapping can run before owner provisioning"
+  grep -qxF 'Before=display-manager.service' \
+    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
+    fail "target validation failed: hostshare mapping can run after desktop login"
   file "$MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi" |
     grep -q 'PE32+ executable for EFI (application), ARM64' ||
     fail "target validation failed: the Omarchy UKI is not an AArch64 EFI application"
@@ -1160,7 +1172,7 @@ validate_target() {
   fi
   target_chroot pacman-key --list-keys "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" >/dev/null ||
     fail "target validation failed: the Omarchy AArch64 signing key is not trusted"
-  target_chroot pacman -Q omarchy-aarch64-keyring omarchy omarchy-settings omarchy-spice-guest-tools \
+  target_chroot pacman -Q bindfs omarchy-aarch64-keyring omarchy omarchy-settings omarchy-spice-guest-tools \
     limine limine-mkinitcpio-hook limine-snapper-sync plymouth snapper \
     gst-plugin-pipewire pipewire pipewire-alsa \
     pipewire-audio pipewire-jack pipewire-pulse wireplumber >/dev/null

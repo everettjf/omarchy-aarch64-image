@@ -1,0 +1,15 @@
+[Unit]
+Description=Map the QEMU host share to the Omarchy desktop owner
+After=remote-fs.target omarchy-provision-owner.service
+Wants=remote-fs.target
+Before=display-manager.service
+ConditionPathIsMountPoint=/mnt/hostshare
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/omarchy-aarch64/setup-hostshare
+ExecStop=/usr/lib/omarchy-aarch64/setup-hostshare --unmount
+
+[Install]
+WantedBy=multi-user.target

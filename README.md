@@ -81,8 +81,10 @@ image build fails instead of combining mismatched source and packages.
 - VirtIO graphics, disk, network, RNG, QEMU guest-agent, SPICE clipboard and
   dynamic-display integration.
 - QEMU 9p host-directory sharing preconfigured at `/mnt/hostshare` with the
-  conventional `share` tag. Its `nofail` mount does not block boot when no
-  share is attached.
+  conventional `share` tag. After first-boot owner setup, the image detects the
+  host and guest UID/GID values and exposes a writable mapped view at
+  `~/Hostshare`. Its `nofail` mount does not block boot when no share is
+  attached.
 - PipeWire audio with PulseAudio, ALSA, JACK, and GStreamer compatibility. The
   printing stack is retained.
 - The Omarchy desktop and development environment, excluding LibreOffice,
@@ -188,9 +190,12 @@ agent channel. The SPICE channel is required for guest clipboard sharing and
 dynamic display resizing. QEMU frontends can expose a host directory at the
 preconfigured `/mnt/hostshare` path by assigning its 9p device the `share`
 mount tag. In UTM, select a shared directory and choose VirtFS rather than
-SPICE WebDAV. Host and guest UID/GID values can differ, so follow
-[UTM's `bindfs` guidance](https://docs.getutm.app/guest-support/linux/#virtfs)
-when the raw mount is not writable by the guest user.
+SPICE WebDAV. The image follows the permission-mapping approach in
+[UTM's VirtFS documentation](https://docs.getutm.app/guest-support/linux/#virtfs),
+but uses frontend-neutral `hostshare` naming: `/mnt/hostshare` is the raw mount
+and `~/Hostshare` is the automatically mapped, user-facing directory. Configure
+the shared directory while the VM is stopped, then boot normally; no manual
+UID/GID lookup or `chown` is needed.
 
 ## Profiles and tests
 
