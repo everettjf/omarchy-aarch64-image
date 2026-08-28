@@ -765,14 +765,17 @@ unmount_package_cache() {
 }
 
 retry_target_pacman() {
-  local attempt
+  local attempt delay
 
-  for attempt in 1 2 3; do
+  for attempt in {1..8}; do
     if target_chroot pacman "$@"; then
       return 0
     fi
-    ((attempt < 3)) || fail "pacman failed after 3 attempts"
-    warn "pacman attempt $attempt failed; retrying with the persistent package cache"
+    ((attempt < 8)) || fail "pacman failed after 8 attempts"
+    delay=$((attempt * 10))
+    ((delay <= 60)) || delay=60
+    warn "pacman attempt $attempt failed; retrying in ${delay}s with the persistent package cache"
+    sleep "$delay"
   done
 }
 

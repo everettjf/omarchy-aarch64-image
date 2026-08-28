@@ -500,7 +500,7 @@ grep -Fq 'efi_variable_storage: "omitted-and-created-by-utm"' \
   "$ROOT/bin/package-utm-release" ||
   fail "UTM release metadata does not promise clean firmware state"
 pass "native GitHub image publishing avoids duplicate artifacts and EFI state"
-grep -Fq 'pacman failed after 3 attempts' "$ROOT/bin/build-image" ||
+grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
 grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||
   fail "ASCII-armored Arch Linux ARM keys are not normalized for gpgv"
