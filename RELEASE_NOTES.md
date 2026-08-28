@@ -1,6 +1,6 @@
 ## Quick install with EZVM
 
-Install EZVM 5.0.0 or newer, then run:
+Install EZVM 1.0.1 or newer, then run:
 
 ```bash
 /bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
@@ -9,7 +9,9 @@ Install EZVM 5.0.0 or newer, then run:
 The installer downloads and verifies every split raw-image payload, verifies
 the reconstructed disk, and asks EZVM to create a new `.ezvm` machine with a
 fresh machine identifier and EFI variable store. No firmware state or host
-identity is distributed in the image.
+identity is distributed in the image. The verified Omarchy title artwork is
+also installed as the machine's built-in thumbnail, so the library looks
+finished before the first boot and without screen-recording permission.
 
 ## Quick install with UTM
 

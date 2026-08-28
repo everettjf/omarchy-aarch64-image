@@ -5,6 +5,7 @@ set -euo pipefail
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-virt.raw"
 OUTPUT_DIR="$PROJECT_ROOT/build/release-assets"
+THUMBNAIL_PATH="$PROJECT_ROOT/assets/omarchy-thumbnail.png"
 RELEASE_TAG=""
 PART_SIZE_MIB=${OMARCHY_EZVM_PART_SIZE_MIB:-1900}
 RELEASE_REPOSITORY=${OMARCHY_EZVM_RELEASE_REPOSITORY:-everettjf/omarchy-aarch64-image}
@@ -24,12 +25,14 @@ while (($#)); do
     --tag) RELEASE_TAG=${2:?}; shift 2 ;;
     --image) IMAGE_PATH=$(absolute_existing_path "${2:?}"); shift 2 ;;
     --output) OUTPUT_DIR=$(absolute_directory "${2:?}"); shift 2 ;;
+    --thumbnail) THUMBNAIL_PATH=$(absolute_existing_path "${2:?}"); shift 2 ;;
     *) fail "unknown option: $1" ;;
   esac
 done
 
 [[ $RELEASE_TAG =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "a valid --tag is required"
 [[ -f $IMAGE_PATH ]] || fail "raw image not found: $IMAGE_PATH"
+[[ -f $THUMBNAIL_PATH ]] || fail "thumbnail image not found: $THUMBNAIL_PATH"
 if [[ ! $PART_SIZE_MIB =~ ^[0-9]+$ ]] ||
   ((PART_SIZE_MIB <= 0 || PART_SIZE_MIB >= 2048)); then
   fail "part size must be between 1 and 2047 MiB"
@@ -41,7 +44,11 @@ done
 mkdir -p "$OUTPUT_DIR"
 prefix="$OUTPUT_DIR/Omarchy-ezvm.sparse.gz.part-"
 rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
-  "$OUTPUT_DIR/ezvm-release-manifest.json"
+  "$OUTPUT_DIR/ezvm-release-manifest.json" "$OUTPUT_DIR/Omarchy-thumbnail.png"
+
+install -m644 "$THUMBNAIL_PATH" "$OUTPUT_DIR/Omarchy-thumbnail.png"
+thumbnail_sha=$(sha256sum "$OUTPUT_DIR/Omarchy-thumbnail.png" | awk '{print $1}')
+thumbnail_size=$(file_size "$OUTPUT_DIR/Omarchy-thumbnail.png")
 
 printf 'Encoding the EZVM sparse stream, compressing, and splitting…\n'
 "$PROJECT_ROOT/bin/encode-ezvm-sparse" "$IMAGE_PATH" |
@@ -73,12 +80,13 @@ jq -n \
   --arg tag "$RELEASE_TAG" --arg repository "$RELEASE_REPOSITORY" \
   --arg image_sha256 "$image_sha" --argjson image_size "$image_size" \
   --arg archive_sha256 "$archive_sha" --argjson archive_size "$archive_size" \
+  --arg thumbnail_sha256 "$thumbnail_sha" --argjson thumbnail_size "$thumbnail_size" \
   --argjson parts "$parts_json" '
   {
     schemaVersion: 1,
     kind: "io.github.everettjf.ezvm.preinstalled-image",
     architecture: "arm64",
-    minimumEZVMVersion: "1.0.0",
+    minimumEZVMVersion: "1.0.1",
     product: {id: "org.omarchy.aarch64", name: "Omarchy", version: $tag},
     disk: {
       format: "raw",
@@ -90,6 +98,12 @@ jq -n \
       compressedSize: $archive_size,
       sha256: $archive_sha256,
       parts: $parts
+    },
+    thumbnail: {
+      name: "Omarchy-thumbnail.png",
+      mediaType: "image/png",
+      size: $thumbnail_size,
+      sha256: $thumbnail_sha256
     },
     release: {repository: $repository, tag: $tag},
     virtualMachine: {
@@ -114,7 +128,7 @@ destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
 [[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
 [[ ! -e $destination ]] || fail "destination already exists: $destination"
 ezvm_bin=${EZVM_CLI_EXECUTABLE:-$(command -v ezvm || true)}
-[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 1.0.0 or newer must be installed with Homebrew"
+[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 1.0.1 or newer must be installed with Homebrew"
 work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
@@ -131,12 +145,23 @@ jq -e '
   .archive.compression == "ezvm-sparse-stream+gzip" and
   (.archive.sha256 | test("^[0-9a-f]{64}$")) and
   (.archive.parts | type == "array" and length > 0) and
-  all(.archive.parts[]; (.name | test("^[A-Za-z0-9._-]+$")) and (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$")))
+  all(.archive.parts[]; (.name | test("^[A-Za-z0-9._-]+$")) and (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$"))) and
+  .thumbnail.mediaType == "image/png" and
+  (.thumbnail.name | test("^[A-Za-z0-9._-]+$")) and
+  (.thumbnail.size | type == "number") and
+  (.thumbnail.sha256 | test("^[0-9a-f]{64}$"))
 ' "$manifest" >/dev/null || fail "release manifest is invalid or unsupported"
 image_name='Omarchy-ezvm.raw'
 image_sha=$(jq -r '.disk.sha256' "$manifest")
 image_size=$(jq -r '.disk.virtualSize' "$manifest")
 archive_sha=$(jq -r '.archive.sha256' "$manifest")
+thumbnail_name=$(jq -r '.thumbnail.name' "$manifest")
+thumbnail_size=$(jq -r '.thumbnail.size' "$manifest")
+thumbnail_sha=$(jq -r '.thumbnail.sha256' "$manifest")
+thumbnail="$work/$thumbnail_name"
+curl --fail --location --retry 3 --output "$thumbnail" "$base_url/$thumbnail_name"
+[[ $(stat -f %z "$thumbnail") == "$thumbnail_size" ]] || fail "thumbnail size mismatch"
+[[ $(shasum -a 256 "$thumbnail" | awk '{print $1}') == "$thumbnail_sha" ]] || fail "thumbnail checksum mismatch"
 decoder="$work/decode-ezvm-sparse"
 cat >"$decoder" <<'EZVM_SPARSE_DECODER'
 BODY_START
@@ -167,7 +192,7 @@ actual_size=$(stat -f %z "$raw")
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')
 [[ $actual == "$image_sha" ]] || fail "raw image checksum mismatch"
 mkdir -p "$(dirname "$destination")"
-"$ezvm_bin" install-image "$manifest" --image "$raw" --destination "$destination" --timeout 300
+"$ezvm_bin" install-image "$manifest" --image "$raw" --thumbnail "$thumbnail" --destination "$destination" --timeout 300
 if [[ ${OMARCHY_EZVM_SKIP_OPEN:-0} != 1 ]]; then open -a EZVM; fi
 printf '\nInstalled Omarchy for EZVM: %s\n' "$destination"
 BODY
