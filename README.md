@@ -130,7 +130,8 @@ installation paths:
 - numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.3 or newer.
 
 The recommended Apple Silicon installation command installs or updates EZVM,
-verifies the published Omarchy installer, and installs the image:
+verifies the published Omarchy installer, checks that the destination volume
+has at least 15 GiB available, and installs the image:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
