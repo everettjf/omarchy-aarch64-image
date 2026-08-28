@@ -127,7 +127,7 @@ installation paths:
 - image provenance and an archive of the exact package inventories.
 - `install-Omarchy-ezvm.command`, the one-command EZVM installer;
 - `ezvm-release-manifest.json`; and
-- numbered gzip-compressed EZVM sparse-stream parts for EZVM 1.0.1 or newer; and
+- numbered gzip-compressed EZVM sparse-stream parts for EZVM 1.0.0 or newer; and
 - `Omarchy-thumbnail.png`, verified from the manifest and installed into the
   resulting machine as its built-in cover.
 
@@ -139,7 +139,7 @@ has at least 15 GiB available, and installs the image:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
 ```
 
-The image-only EZVM installer below is available when EZVM 1.0.1 or newer is
+The image-only EZVM installer below is available when EZVM 1.0.0 or newer is
 already installed. It treats `ezvm-release-manifest.json` as its sole metadata
 source, verifies every part, the compressed stream, the raw disk size, and the
 final raw-disk SHA-256 before invoking `ezvm install-image`. The portable sparse

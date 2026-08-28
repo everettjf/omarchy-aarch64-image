@@ -162,7 +162,7 @@ PY
     .product.id == "org.omarchy.aarch64" and
     .product.version == "v4.0.1-test.1" and
     .architecture == "arm64" and
-    .minimumEZVMVersion == "1.0.1" and
+    .minimumEZVMVersion == "1.0.0" and
     .disk.format == "raw" and
     (.disk.virtualSize | type == "number") and
     (.disk.sha256 | test("^[0-9a-f]{64}$")) and

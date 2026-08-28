@@ -1,6 +1,6 @@
 ## Quick install with EZVM
 
-Install EZVM 1.0.1 or newer, then run:
+Install EZVM 1.0.0 or newer, then run:
 
 ```bash
 /bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
