@@ -129,7 +129,15 @@ installation paths:
 - `ezvm-release-manifest.json`; and
 - numbered gzip-compressed EZVM sparse-stream parts for EZVM 5.0.3 or newer.
 
-The EZVM installer treats `ezvm-release-manifest.json` as its sole metadata
+The recommended Apple Silicon installation command installs or updates EZVM,
+verifies the published Omarchy installer, and installs the image:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
+```
+
+The image-only EZVM installer below is available when EZVM 5.0.3 or newer is
+already installed. It treats `ezvm-release-manifest.json` as its sole metadata
 source, verifies every part, the compressed stream, the raw disk size, and the
 final raw-disk SHA-256 before invoking `ezvm install-image`. The portable sparse
 stream records only allocated extents and recreates them at their exact disk
