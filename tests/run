@@ -87,6 +87,14 @@ pass "all project and modified runtime scripts parse as Bash"
     fail "EZVM installer does not embed the sparse stream decoder"
   grep -Fq 'install-image "$manifest"' "$fixture/release/install-Omarchy-ezvm.command" ||
     fail "EZVM installer does not use the public install-image command"
+  grep -Fq 'Verifying the complete compressed image' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not explain the complete archive verification stage"
+  grep -Fq 'Reconstructing the 64 GiB sparse disk' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not explain the sparse reconstruction stage"
+  grep -Fq 'Verifying the reconstructed 64 GiB disk' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not explain the raw disk verification stage"
+  grep -Fq 'Importing Omarchy into EZVM' "$fixture/release/install-Omarchy-ezvm.command" ||
+    fail "EZVM installer does not explain the EZVM import stage"
   grep -Fq -- '--thumbnail "$thumbnail"' "$fixture/release/install-Omarchy-ezvm.command" ||
     fail "EZVM installer does not install the bundled thumbnail"
   [[ -s $fixture/release/Omarchy-thumbnail.png ]] ||

@@ -180,18 +180,23 @@ for ((index = 0; index < part_count; index++)); do
   [[ $actual_size == "$expected_size" ]] || fail "size mismatch: $name"
   actual=$(shasum -a 256 "$work/$name" | awk '{print $1}')
   [[ $actual == "$expected_sha" ]] || fail "checksum mismatch: $name"
+  printf 'Verified %s.\n' "$name"
   downloaded+=("$work/$name")
 done
+printf 'Verifying the complete compressed image…\n'
 actual=$(cat "${downloaded[@]}" | shasum -a 256 | awk '{print $1}')
 [[ $actual == "$archive_sha" ]] || fail "compressed image checksum mismatch"
 raw="$work/$image_name"
+printf 'Reconstructing the 64 GiB sparse disk… This usually takes 3–5 minutes.\n'
 cat "${downloaded[@]}" | gzip -dc | perl "$decoder" "$raw"
 [[ -f $raw ]] || fail "sparse archive did not produce the expected raw image"
 actual_size=$(stat -f %z "$raw")
 [[ $actual_size == "$image_size" ]] || fail "raw image size mismatch"
+printf 'Verifying the reconstructed 64 GiB disk… This can take a few minutes.\n'
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')
 [[ $actual == "$image_sha" ]] || fail "raw image checksum mismatch"
 mkdir -p "$(dirname "$destination")"
+printf 'Importing Omarchy into EZVM…\n'
 "$ezvm_bin" install-image "$manifest" --image "$raw" --thumbnail "$thumbnail" --destination "$destination" --timeout 300
 if [[ ${OMARCHY_EZVM_SKIP_OPEN:-0} != 1 ]]; then open -a EZVM; fi
 printf '\nInstalled Omarchy for EZVM: %s\n' "$destination"
