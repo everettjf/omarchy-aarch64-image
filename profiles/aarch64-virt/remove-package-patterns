@@ -10,3 +10,8 @@
 ^netctl$
 ^linux-firmware($|-)
 ^sof-firmware$
+^bindfs$
+^qemu-guest-agent$
+^spice-vdagent$
+^vulkan-virtio$
+^omarchy-spice-guest-tools$

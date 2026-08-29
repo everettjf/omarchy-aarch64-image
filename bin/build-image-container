@@ -70,6 +70,6 @@ exec docker "${DOCKER_ARGS[@]}" \
       chown -R "$HOST_UID:$HOST_GID" /project/build
     }
     trap restore_ownership EXIT
-    pacman -Syu --needed --noconfirm btrfs-progs dosfstools parted qemu-img
+    pacman -Syu --needed --noconfirm btrfs-progs dosfstools parted
     /project/bin/build-image "$@"
   ' build-image "${CONTAINER_ARGS[@]}"

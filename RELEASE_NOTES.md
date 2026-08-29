@@ -1,69 +1,49 @@
-## Quick install with EZVM
+## Omarchy for EZVM
 
-Install EZVM 1.0.0 or newer, then run:
+This Release contains only the verified sparse AArch64 Omarchy image for EZVM.
+It is designed for Apple silicon and Apple's Virtualization.framework.
+
+## Quick install
+
+Install or update EZVM and import Omarchy with one command:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
+```
+
+Requirements:
+
+- Apple silicon Mac;
+- macOS 26 or newer;
+- Homebrew; and
+- at least 15 GiB free.
+
+If EZVM 1.0.0 or newer is already installed, run the image-only installer:
 
 ```bash
 /bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
 ```
 
-The installer downloads and verifies every split raw-image payload, verifies
-the reconstructed disk, and asks EZVM to create a new `.ezvm` machine with a
-fresh machine identifier and EFI variable store. No firmware state or host
-identity is distributed in the image. The verified Omarchy title artwork is
-also installed as the machine's built-in thumbnail, so the library looks
-finished before the first boot and without screen-recording permission.
+The installer verifies the manifest, every split part, the complete compressed
+stream, the reconstructed raw disk, and the bundled thumbnail before asking
+EZVM to create a new machine with fresh identity and NVRAM storage.
 
-## Quick install with UTM
+Do not download the numbered image parts manually. The installer streams,
+verifies, decodes, and imports them in the required order.
 
-Requirements: a current UTM installation and at least 12 GB of free disk space
-while the bundle is downloaded and unpacked.
+## Release integrity
 
-Open Terminal and run:
+The Release is published only after:
 
-```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash'
-```
+- the native AArch64 build and package contracts pass;
+- the sparse raw image checksum passes;
+- the EZVM release packager verifies its output;
+- no asset exceeds GitHub's 2 GiB limit;
+- every local Release asset has a valid SHA-256; and
+- GitHub reports the same digest for every uploaded asset.
 
-The command fetches the small installer from the latest Release. It then
-downloads every image part, verifies each SHA-256 digest, reconstructs the UTM
-bundle, installs it as `~/Downloads/Omarchy-virt.utm`, and opens it in UTM.
-Complete Omarchy's owner, keyboard, Git, hostname, and timezone setup inside
-the VM.
+The image remains sparse after import, so its 64 GiB logical disk does not
+consume 64 GiB of physical host storage.
 
-To choose a different parent directory:
-
-```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-virt.command | /bin/bash -s -- "$1"' _ "/path/for/virtual-machines"
-```
-
-For a GUI-oriented alternative, download **`Install-Omarchy-virt.zip`** from
-the Assets section, extract it, and run **`install-Omarchy-virt.command`**. If
-macOS blocks the downloaded command, Control-click it, choose **Open**, and
-confirm once.
-
-Do not download the numbered `Omarchy-virt.utm.zip.part-*` assets manually.
-They are below GitHub's per-file size limit and are fetched automatically by
-the small installer.
-
-The script itself is readable in this Release and verifies all downloaded
-payloads before installation.
-
-Each installation receives a new VM UUID, drive UUID, and locally administered
-MAC address. EFI variable storage is deliberately absent from the Release; UTM
-creates a clean copy on first launch, so no builder firmware state or boot
-entries are reused.
-
-## Host directory sharing
-
-With the VM stopped, select a shared directory in UTM and use **VirtFS**. After
-the first-boot owner setup, it appears inside Omarchy as `~/Hostshare` with the
-guest user's UID/GID mapped automatically. `/mnt/hostshare` remains the raw 9p
-mount for diagnostics.
-
-## Verification and inventory
-
-`SHA256SUMS` covers every Release asset. `release-manifest.json` records the
-source commit, complete archive digest, image digest and ordered part list.
-`image-provenance.txt` records verified build inputs, while
-`image-package-inventory.zip` contains the exact explicit/all package lists,
-size/dependency table, and orphan list from the image.
+The Release also includes build provenance and exact package inventories for
+auditing the Arch Linux ARM and signed Omarchy inputs.

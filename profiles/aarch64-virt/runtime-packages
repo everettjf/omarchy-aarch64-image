@@ -16,12 +16,9 @@ pipewire-alsa
 pipewire-audio
 pipewire-jack
 pipewire-pulse
-qemu-guest-agent
 snapper
-spice-vdagent
 sudo
 vulkan-swrast
-vulkan-virtio
 wireplumber
 xdg-user-dirs
 zram-generator

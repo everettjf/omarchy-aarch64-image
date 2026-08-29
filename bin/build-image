@@ -76,7 +76,6 @@ Options:
   --profile NAME         Image profile (currently: aarch64-virt)
   --output PATH          Output image path
   --size SIZE            Sparse virtual disk size (default: 64G)
-  --format FORMAT        qcow2, raw, or both
   --omarchy-source PATH  Explicit local Omarchy checkout (development only)
   --omarchy-repository P Complete signed local repository (development only)
   --rootfs PATH          Use a local Arch Linux ARM rootfs tarball
@@ -150,11 +149,6 @@ parse_args() {
         IMAGE_SIZE=$2
         shift 2
         ;;
-      --format)
-        (($# >= 2)) || fail "--format requires qcow2, raw, or both"
-        IMAGE_FORMAT=$2
-        shift 2
-        ;;
       --omarchy-source)
         (($# >= 2)) || fail "--omarchy-source requires a path"
         [[ -z $OMARCHY_SOURCE_OVERRIDE ]] || fail "--omarchy-source may only be specified once"
@@ -208,16 +202,6 @@ parse_args() {
   done
 }
 
-raw_output_path() {
-  if [[ $IMAGE_FORMAT == raw ]]; then
-    printf '%s' "$OUTPUT_PATH"
-  elif [[ $OUTPUT_PATH == *.qcow2 ]]; then
-    printf '%s.raw' "${OUTPUT_PATH%.qcow2}"
-  else
-    printf '%s.raw' "$OUTPUT_PATH"
-  fi
-}
-
 validate_configuration() {
   local image_bytes profile_file
 
@@ -230,10 +214,7 @@ validate_configuration() {
     remove-package-patterns runtime-packages shell-defaults.jq; do
     [[ -f $PROFILE_DIR/$profile_file ]] || fail "profile is missing $profile_file: $IMAGE_PROFILE"
   done
-  case $IMAGE_FORMAT in
-    qcow2 | raw | both) ;;
-    *) fail "unsupported image format: $IMAGE_FORMAT" ;;
-  esac
+  [[ $IMAGE_FORMAT == raw ]] || fail "the EZVM profile only supports sparse raw images"
 
   image_bytes=$(numfmt --from=iec "$IMAGE_SIZE") || fail "invalid image size: $IMAGE_SIZE"
   ((image_bytes >= 16 * 1024 * 1024 * 1024)) || fail "image size must be at least 16 GiB"
@@ -241,25 +222,14 @@ validate_configuration() {
 
   validate_remove_package_patterns
 
-  if [[ $IMAGE_FORMAT == qcow2 || $IMAGE_FORMAT == both ]]; then
-    require_command qemu-img
-  fi
 }
 
 validate_outputs() {
-  local raw_output
-  raw_output=$(raw_output_path)
-
   mkdir -p "$(dirname -- "$OUTPUT_PATH")"
-  rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part" \
-    "$raw_output.part" "$raw_output.sha256.part"
+  rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part"
   if [[ -e $OUTPUT_PATH && $FORCE == 0 ]]; then
     fail "output already exists: $OUTPUT_PATH (use --force to replace it)"
   fi
-  if [[ $IMAGE_FORMAT == both && -e $raw_output && $FORCE == 0 ]]; then
-    fail "output already exists: $raw_output (use --force to replace it)"
-  fi
-
   return 0
 }
 
@@ -484,7 +454,7 @@ resolve_official_packages() {
 
 cleanup() {
   local status=$?
-  local raw_output side
+  local side
   local -a mount_roots=()
 
   if [[ $MOUNT_DIR == /tmp/omarchy-aarch64-image.* ]]; then
@@ -528,9 +498,7 @@ cleanup() {
     rmdir -- "$MANIFEST_STAGE_DIR"
   fi
   if [[ -n $OUTPUT_PATH ]]; then
-    raw_output=$(raw_output_path)
-    rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part" \
-      "$raw_output.part" "$raw_output.sha256.part"
+    rm -f -- "$OUTPUT_PATH.part" "$OUTPUT_PATH.sha256.part"
   fi
 
   return "$status"
@@ -656,19 +624,12 @@ write_fstab() {
   esp_uuid=$(blkid -s UUID -o value "${LOOP_DEVICE}p1")
   [[ -n $root_uuid && -n $esp_uuid ]] || fail "failed to read filesystem UUIDs"
 
-  # Use a frontend-neutral guest path for the host's QEMU 9p share. UTM uses
-  # the compatible fixed mount tag "share". The nofail entry is harmless when
-  # another QEMU-compatible host does not attach a share.
-  install -d -m755 "$MOUNT_DIR/mnt/hostshare"
-
   cat >"$MOUNT_DIR/etc/fstab" <<EOF
 UUID=$root_uuid  /                  btrfs  rw,noatime,compress=zstd:3,subvol=@          0 0
 UUID=$root_uuid  /home             btrfs  rw,noatime,compress=zstd:3,subvol=@home      0 0
 UUID=$root_uuid  /var/log          btrfs  rw,noatime,compress=zstd:3,subvol=@log       0 0
 UUID=$root_uuid  /var/cache/pacman/pkg btrfs rw,noatime,compress=zstd:3,subvol=@pkg    0 0
 UUID=$esp_uuid   /boot              vfat   rw,umask=0077                               0 2
-# QEMU 9p host shared folder; compatible frontends expose the tag "share".
-share            /mnt/hostshare     9p     trans=virtio,version=9p2000.L,rw,_netdev,nofail,auto 0 0
 EOF
 }
 
@@ -898,7 +859,6 @@ EOF
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
-  chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/setup-hostshare"
   install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
   printf '%s\n' "$IMAGE_PROFILE" >"$MOUNT_DIR/etc/omarchy-aarch64/profile"
   read_list "$PROFILE_DIR/excluded-packages" \
@@ -906,7 +866,6 @@ EOF
   read_list "$CONFIG_DIR/omarchy-packages.aarch64" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
-  target_chroot systemctl enable omarchy-aarch64-hostshare.service
 }
 
 apply_profile_shell_defaults() {
@@ -1079,7 +1038,6 @@ validate_target() {
     etc/systemd
     etc/systemd/system
     mnt
-    mnt/hostshare
     usr
     usr/lib
   )
@@ -1101,16 +1059,10 @@ validate_target() {
     etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/omarchy-aarch64-repository
     etc/snapper/configs/root
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
-    etc/systemd/system/multi-user.target.wants/omarchy-aarch64-hostshare.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
     usr/bin/omarchy-provision-owner
     usr/bin/limine-mkinitcpio
     usr/bin/limine-snapper-sync
-    usr/bin/spice-guest-tools
-    usr/lib/systemd/user/graphical-session.target.wants/spice-guest-tools-bootstrap.service
-    usr/lib/systemd/user/spice-clipboard-bridge.service
-    usr/lib/systemd/user/spice-display-bridge.service
-    usr/lib/omarchy-aarch64/setup-hostshare
     usr/share/omarchy-aarch64/repository-manifest.json
     usr/share/pacman/keyrings/omarchy-aarch64.gpg
     usr/share/omarchy/version
@@ -1129,26 +1081,6 @@ validate_target() {
   done
   [[ -f $MOUNT_DIR/boot/Image ]] ||
     fail "target validation failed: Arch Linux ARM kernel is missing"
-  compgen -G "$MOUNT_DIR/usr/lib/modules/*/kernel/fs/9p/9p.ko*" >/dev/null ||
-    fail "target validation failed: the kernel has no 9p filesystem module"
-  compgen -G "$MOUNT_DIR/usr/lib/modules/*/kernel/net/9p/9pnet_virtio.ko*" >/dev/null ||
-    fail "target validation failed: the kernel has no VirtIO 9p transport module"
-  grep -Eq '^share[[:space:]]+/mnt/hostshare[[:space:]]+9p[[:space:]]+trans=virtio,version=9p2000\.L,rw,_netdev,nofail,auto[[:space:]]+0[[:space:]]+0$' \
-    "$MOUNT_DIR/etc/fstab" ||
-    fail "target validation failed: QEMU host sharing is not configured with the share tag"
-  [[ $(stat -c '%a' "$MOUNT_DIR/mnt/hostshare") == 755 ]] ||
-    fail "target validation failed: /mnt/hostshare does not have mode 0755"
-  bash -n "$MOUNT_DIR/usr/lib/omarchy-aarch64/setup-hostshare" ||
-    fail "target validation failed: the hostshare setup helper has invalid shell syntax"
-  grep -qxF 'After=omarchy-provision-owner.service mnt-hostshare.mount' \
-    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-    fail "target validation failed: hostshare mapping does not wait for owner and raw mount"
-  grep -qxF 'Wants=mnt-hostshare.mount' \
-    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-    fail "target validation failed: hostshare mapping does not pull in the raw mount"
-  grep -qxF 'Before=display-manager.service' \
-    "$MOUNT_DIR/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-    fail "target validation failed: hostshare mapping can run after desktop login"
   file "$MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi" |
     grep -q 'PE32+ executable for EFI (application), ARM64' ||
     fail "target validation failed: the Omarchy UKI is not an AArch64 EFI application"
@@ -1185,7 +1117,7 @@ validate_target() {
   fi
   target_chroot pacman-key --list-keys "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" >/dev/null ||
     fail "target validation failed: the Omarchy AArch64 signing key is not trusted"
-  target_chroot pacman -Q bindfs omarchy-aarch64-keyring omarchy omarchy-settings omarchy-spice-guest-tools \
+  target_chroot pacman -Q omarchy-aarch64-keyring omarchy omarchy-settings \
     limine limine-mkinitcpio-hook limine-snapper-sync plymouth snapper \
     gst-plugin-pipewire pipewire pipewire-alsa \
     pipewire-audio pipewire-jack pipewire-pulse wireplumber >/dev/null
@@ -1225,7 +1157,6 @@ validate_target() {
 
 manifest_output_base() {
   case $OUTPUT_PATH in
-    *.qcow2) printf '%s' "${OUTPUT_PATH%.qcow2}" ;;
     *.raw) printf '%s' "${OUTPUT_PATH%.raw}" ;;
     *) printf '%s' "$OUTPUT_PATH" ;;
   esac
@@ -1261,10 +1192,10 @@ publish_package_manifests() {
   MANIFEST_STAGE_DIR=""
 }
 
-reclaim_conversion_space() {
+reclaim_packaging_space() {
   [[ ${OMARCHY_IMAGE_LOW_DISK:-0} == 1 ]] || return 0
 
-  log "Reclaiming transient caches before QCOW2 conversion"
+  log "Reclaiming transient caches before sparse raw packaging"
   rm -rf -- "$PACMAN_CACHE_DIR" "$CACHE_DIR/sources"
   find "$CACHE_DIR" -mindepth 1 -maxdepth 1 -type d \
     \( -name 'omarchy-pkgs-*' -o -name prebuilt-packages \) \
@@ -1359,33 +1290,14 @@ finalize_image_artifact() {
 }
 
 emit_images() {
-  local qcow_temp raw_output raw_temp logical_size allocated_size
-  raw_output=$(raw_output_path)
-  qcow_temp="$OUTPUT_PATH.part"
-  raw_temp="$raw_output.part"
-
-  case $IMAGE_FORMAT in
-    qcow2)
-      log "Converting sparse raw disk to compressed QCOW2"
-      qemu-img convert -p -c -f raw -O qcow2 "$RAW_TEMP" "$qcow_temp"
-      finalize_image_artifact "$qcow_temp" "$OUTPUT_PATH"
-      ;;
-    raw)
-      cp --sparse=always "$RAW_TEMP" "$raw_temp"
-      finalize_image_artifact "$raw_temp" "$OUTPUT_PATH"
-      ;;
-    both)
-      cp --sparse=always "$RAW_TEMP" "$raw_temp"
-      logical_size=$(stat -c %s "$raw_temp")
-      allocated_size=$(($(stat -c %b "$raw_temp") * 512))
-      ((allocated_size < logical_size / 2)) ||
-        fail "raw image is not sparse after trim (${allocated_size}/${logical_size} bytes allocated)"
-      log "Converting sparse raw disk to compressed QCOW2"
-      qemu-img convert -p -c -f raw -O qcow2 "$RAW_TEMP" "$qcow_temp"
-      finalize_image_artifact "$raw_temp" "$raw_output"
-      finalize_image_artifact "$qcow_temp" "$OUTPUT_PATH"
-      ;;
-  esac
+  local raw_temp logical_size allocated_size
+  raw_temp="$OUTPUT_PATH.part"
+  cp --sparse=always "$RAW_TEMP" "$raw_temp"
+  logical_size=$(stat -c %s "$raw_temp")
+  allocated_size=$(($(stat -c %b "$raw_temp") * 512))
+  ((allocated_size < logical_size / 2)) ||
+    fail "raw image is not sparse after trim (${allocated_size}/${logical_size} bytes allocated)"
+  finalize_image_artifact "$raw_temp" "$OUTPUT_PATH"
 }
 
 main() {
@@ -1393,9 +1305,6 @@ main() {
 
   select_profile "$@"
   parse_args "$@"
-  if [[ $IMAGE_FORMAT == raw && $OUTPUT_PATH == "$PROJECT_ROOT/$IMAGE_OUTPUT" && $OUTPUT_PATH == *.qcow2 ]]; then
-    OUTPUT_PATH="${OUTPUT_PATH%.qcow2}.raw"
-  fi
   for command in awk blkid bsdtar btrfs chroot curl file findmnt gpg gpgv jq losetup mkfs.btrfs \
     mkfs.fat mknod mount numfmt pacman parted readlink realpath sha256sum stat truncate udevadm umount git; do
     require_command "$command"
@@ -1435,7 +1344,7 @@ main() {
   validate_target
   stage_package_manifests
   stop_target_background_helpers
-  reclaim_conversion_space
+  reclaim_packaging_space
   create_factory_snapshot
   detach_image
   emit_images

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-virt.raw"
+IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-ezvm.raw"
 OUTPUT_DIR="$PROJECT_ROOT/build/release-assets"
 THUMBNAIL_PATH="$PROJECT_ROOT/assets/omarchy-thumbnail.png"
 RELEASE_TAG=""

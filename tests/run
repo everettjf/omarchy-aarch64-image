@@ -5,8 +5,11 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly ROOT
 OMARCHY_TEST_SOURCE=${OMARCHY_TEST_SOURCE:-"$ROOT/../omarchy-aarch64"}
-OMARCHY_TEST_SOURCE=$(realpath -e -- "$OMARCHY_TEST_SOURCE")
+OMARCHY_TEST_SOURCE=$(realpath "$OMARCHY_TEST_SOURCE")
 readonly OMARCHY_TEST_SOURCE
+PYTHONPYCACHEPREFIX=${PYTHONPYCACHEPREFIX:-$(mktemp -d)}
+export PYTHONPYCACHEPREFIX
+trap 'rm -rf "$PYTHONPYCACHEPREFIX"' EXIT
 
 [[ -d $OMARCHY_TEST_SOURCE/.git ]] || {
   echo "FAIL: set OMARCHY_TEST_SOURCE to an omarchy-aarch64 checkout" >&2
@@ -28,7 +31,7 @@ while IFS= read -r script; do
     *perl*) perl -c "$script" || fail "Perl syntax: ${script#$ROOT/}" ;;
     *) bash -n "$script" || fail "Bash syntax: ${script#$ROOT/}" ;;
   esac
-done < <(find "$ROOT/bin" -type f -print; find "$ROOT/profiles" -type f -perm /111 -print)
+done < <(find "$ROOT/bin" -type f -print; find "$ROOT/profiles" -type f -perm -111 -print)
 bash -n "$OMARCHY_TEST_SOURCE/install/user/mise-work.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/hardware/all.sh"
 bash -n "$OMARCHY_TEST_SOURCE/install/hardware/virtual-machine.sh"
@@ -40,113 +43,11 @@ bash -n "$OMARCHY_TEST_SOURCE/install/post-install/pacman.sh"
     fail "image build does not enforce sparse raw output"
 pass "all project and modified runtime scripts parse as Bash"
 
-python3 - "$ROOT/utm/Omarchy-virt.utm/config.plist" "$ROOT/utm/icon.png.base64" <<'PY'
-import base64
-import pathlib
-import plistlib
-import sys
-
-config_path = pathlib.Path(sys.argv[1])
-with config_path.open("rb") as stream:
-    config = plistlib.load(stream)
-
-assert config["Backend"] == "QEMU"
-assert config["System"]["Architecture"] == "aarch64"
-assert config["System"]["Target"] == "virt"
-assert config["QEMU"]["UEFIBoot"] is True
-assert config["Drive"][0]["ImageName"] == "omarchy-aarch64-virt.qcow2"
-assert config["Drive"][0]["Interface"] == "VirtIO"
-assert config["Sharing"]["DirectoryShareMode"] == "VirtFS"
-assert config["Display"][0]["DynamicResolution"] is True
-assert config["Display"][0]["NativeResolution"] is True
-
-encoded_icon = b"".join(pathlib.Path(sys.argv[2]).read_bytes().split())
-icon = base64.b64decode(encoded_icon, validate=True)
-assert icon.startswith(b"\x89PNG\r\n\x1a\n")
-PY
-if find "$ROOT/utm" -type f \( -name 'efi_vars.fd' -o -name '*.qcow2' -o -name '*.vmstate' \) |
-  grep -q .; then
-  fail "the versioned UTM template contains machine-specific runtime state"
-fi
-pass "UTM template is a clean AArch64 virt configuration without EFI state"
 
 (
   fixture=$(mktemp -d)
   trap 'rm -rf "$fixture"' EXIT
-  truncate --size 2500K "$fixture/test.qcow2"
-  printf 'test_provenance=yes\n' >"$fixture/image-provenance.txt"
-  for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
-    printf 'test metadata\n' >"$fixture/test.$suffix"
-  done
-  : >"$fixture/test.orphans.txt"
-
-  OMARCHY_UTM_PART_SIZE_MIB=1 "$ROOT/bin/package-utm-release" \
-    --tag v4.0.1-test.1 \
-    --image "$fixture/test.qcow2" \
-    --provenance "$fixture/image-provenance.txt" \
-    --output "$fixture/release" >/dev/null
-
-  (cd "$fixture/release" && sha256sum --check SHA256SUMS >/dev/null) ||
-    fail "UTM release asset checksums are invalid"
-  bash -n "$fixture/release/install-Omarchy-virt.command"
-  [[ -x $fixture/release/install-Omarchy-virt.command ]] ||
-    fail "macOS UTM installer is not executable"
-  mapfile -t parts < <(find "$fixture/release" -maxdepth 1 -type f \
-    -name 'Omarchy-virt.utm.zip.part-*' -print | sort)
-  ((${#parts[@]} >= 2)) || fail "the release packager did not split its archive"
-  cat -- "${parts[@]}" >"$fixture/Omarchy-virt.utm.zip"
-  (cd "$fixture" && sha256sum --check release/Omarchy-virt.utm.zip.sha256 >/dev/null) ||
-    fail "the reconstructed UTM archive checksum is invalid"
-
-  python3 - "$fixture/Omarchy-virt.utm.zip" "$fixture/release/release-manifest.json" \
-    "$fixture/release/Install-Omarchy-virt.zip" \
-    "$fixture/release/image-package-inventory.zip" <<'PY'
-import json
-import plistlib
-import stat
-import sys
-import zipfile
-
-archive_path, manifest_path, installer_path, inventory_path = sys.argv[1:]
-with zipfile.ZipFile(archive_path) as archive:
-    names = set(archive.namelist())
-    assert "Omarchy-virt.utm/config.plist" in names
-    assert "Omarchy-virt.utm/Data/icon.png" in names
-    assert "Omarchy-virt.utm/Data/omarchy-aarch64-virt.qcow2" in names
-    assert not any(name.endswith("efi_vars.fd") for name in names)
-    config = plistlib.loads(archive.read("Omarchy-virt.utm/config.plist"))
-    assert config["System"]["Target"] == "virt"
-
-with open(manifest_path, encoding="utf-8") as stream:
-    manifest = json.load(stream)
-assert manifest["schema"] == 1
-assert manifest["release_tag"] == "v4.0.1-test.1"
-assert manifest["template"]["efi_variable_storage"] == "omitted-and-created-by-utm"
-assert len(manifest["utm_archive"]["parts"]) >= 2
-
-with zipfile.ZipFile(installer_path) as archive:
-    info = archive.getinfo("install-Omarchy-virt.command")
-    mode = info.external_attr >> 16
-    assert mode & stat.S_IXUSR
-
-with zipfile.ZipFile(inventory_path) as archive:
-    assert set(archive.namelist()) == {
-        "all-packages.txt",
-        "explicit-packages.txt",
-        "packages.tsv",
-        "orphans.txt",
-    }
-PY
-  if find "$fixture/release" -maxdepth 1 -type f -empty -print -quit | grep -q .; then
-    fail "the release contains a zero-byte asset rejected by GitHub"
-  fi
-  pass "UTM release packager produces verified split assets and installer"
-)
-
-(
-  fixture=$(mktemp -d)
-  trap 'rm -rf "$fixture"' EXIT
-  truncate --size 2500K "$fixture/test.raw"
+  head -c 2560000 /dev/urandom >"$fixture/test.raw"
   OMARCHY_EZVM_PART_SIZE_MIB=1 "$ROOT/bin/package-ezvm-release" \
     --tag v4.0.1-test.1 \
     --image "$fixture/test.raw" \
@@ -156,6 +57,13 @@ PY
   bash -n "$fixture/release/install-Omarchy-ezvm.command"
   [[ -x $fixture/release/install-Omarchy-ezvm.command ]] ||
     fail "macOS EZVM installer is not executable"
+  mapfile -t parts < <(find "$fixture/release" -maxdepth 1 -type f \
+    -name 'Omarchy-ezvm.sparse.gz.part-*' -print | sort)
+  ((${#parts[@]} >= 2)) || fail "EZVM release packager did not split a multi-part fixture"
+  cat -- "${parts[@]}" | gzip -dc | perl "$ROOT/bin/decode-ezvm-sparse" \
+    "$fixture/reconstructed.raw"
+  cmp "$fixture/test.raw" "$fixture/reconstructed.raw" ||
+    fail "EZVM sparse stream does not reconstruct the source disk byte-for-byte"
   jq -e '
     .schemaVersion == 1 and
     .kind == "io.github.everettjf.ezvm.preinstalled-image" and
@@ -183,6 +91,12 @@ PY
     fail "EZVM installer does not install the bundled thumbnail"
   [[ -s $fixture/release/Omarchy-thumbnail.png ]] ||
     fail "EZVM release does not include the Omarchy thumbnail"
+  if find "$fixture/release" -maxdepth 1 -type f -empty -print -quit | grep -q .; then
+    fail "EZVM release contains a zero-byte asset rejected by GitHub"
+  fi
+  if find "$fixture/release" -maxdepth 1 -type f -print | grep -E -i 'utm|qcow2'; then
+    fail "EZVM release packager emitted a removed UTM/QCOW2 asset"
+  fi
   ! grep -Fq "image_sha='" "$fixture/release/install-Omarchy-ezvm.command" ||
     fail "EZVM installer still embeds a second copy of manifest checksums"
   pass "EZVM release packager produces verified split raw assets and installer"
@@ -220,7 +134,7 @@ fi
 
   select_profile --profile aarch64-virt
   [[ $PROFILE_DIR == "$ROOT/profiles/aarch64-virt" ]] || fail "profile directory was not selected"
-  [[ $OUTPUT_PATH == "$ROOT/build/omarchy-aarch64-virt.qcow2" ]] ||
+  [[ $OUTPUT_PATH == "$ROOT/build/omarchy-aarch64-ezvm.raw" ]] ||
     fail "profile default output is incorrect: $OUTPUT_PATH"
   validate_remove_package_patterns
 
@@ -273,7 +187,7 @@ fi
       fail "aarch64-virt still excludes an upstream development package: $package"
     fi
   done
-  for package in bindfs dotnet-runtime-bin obsidian pinta tensaku tzupdate ufw-docker tobi-try; do
+  for package in dotnet-runtime-bin obsidian pinta tensaku tzupdate ufw-docker tobi-try; do
     grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
       fail "required Omarchy repository package is not selected: $package"
   done
@@ -298,29 +212,30 @@ fi
   ' <<<"$shell_defaults" >/dev/null ||
     fail "aarch64-virt shell defaults retain Night Light or Screen Recording"
 
-  output_fixture="$fixture/output.qcow2"
+  output_fixture="$fixture/output.raw"
   OUTPUT_PATH="$output_fixture"
-  IMAGE_FORMAT=qcow2
+  IMAGE_FORMAT=raw
   FORCE=1
   : >"$output_fixture"
   : >"$output_fixture.part"
   validate_outputs
   [[ -e $output_fixture ]] || fail "--force discarded the previous image before replacement"
-  [[ ! -e $output_fixture.part ]] || fail "stale image conversion partial was not removed"
+  [[ ! -e $output_fixture.part ]] || fail "stale image packaging partial was not removed"
 
   printf 'replacement image\n' >"$output_fixture.part"
   finalize_image_artifact "$output_fixture.part" "$output_fixture"
   [[ $(<"$output_fixture") == "replacement image" ]] ||
     fail "atomic image finalization did not replace the destination"
-  (cd "$fixture" && sha256sum -c output.qcow2.sha256 >/dev/null) ||
+  (cd "$fixture" && sha256sum -c output.raw.sha256 >/dev/null) ||
     fail "atomic image finalization published an invalid checksum"
 
   target_chroot() {
-    printf '%s\n' base dhcpcd ex-vi-compat haveged linux-aarch64 linux-firmware \
-      linux-firmware-amdgpu nano net-tools netctl sof-firmware
+    printf '%s\n' base bindfs dhcpcd ex-vi-compat haveged linux-aarch64 linux-firmware \
+      linux-firmware-amdgpu nano net-tools netctl omarchy-spice-guest-tools \
+      qemu-guest-agent sof-firmware spice-vdagent vulkan-virtio
   }
   mapfile -t removed < <(resolve_profile_removed_packages)
-  [[ ${removed[*]} == "dhcpcd ex-vi-compat haveged linux-firmware linux-firmware-amdgpu nano net-tools netctl sof-firmware" ]] ||
+  [[ ${removed[*]} == "bindfs dhcpcd ex-vi-compat haveged linux-firmware linux-firmware-amdgpu nano net-tools netctl omarchy-spice-guest-tools qemu-guest-agent sof-firmware spice-vdagent vulkan-virtio" ]] ||
     fail "profile removal rules selected: ${removed[*]}"
   pass "aarch64-virt owns its VM desktop, audio stack, shell, and package-removal policy"
 )
@@ -366,7 +281,9 @@ pass "AArch64 repository and exclusion manifests are disjoint"
   pass "signed stable repository manifest is complete and matches the pinned Omarchy source"
 )
 
-mapfile -t image_profiles < <(find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+mapfile -t image_profiles < <(
+  find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
+)
 [[ ${image_profiles[*]} == aarch64-virt ]] ||
   fail "the current release must expose only the aarch64-virt image profile"
 pass "the current release exposes only the aarch64-virt image profile"
@@ -381,13 +298,11 @@ if grep -Eq '^[[:space:]]*(protocol: linux|path: boot\(\):/Image|module_path:)' 
   "$OMARCHY_TEST_SOURCE/default/limine/limine.conf"; then
   fail "the AArch64 fork still carries a static kernel/initramfs boot entry"
 fi
-for package in limine-mkinitcpio-hook omarchy-spice-guest-tools; do
+for package in limine-mkinitcpio-hook; do
   grep -qx "$package" "$ROOT/config/omarchy-packages.aarch64" ||
     fail "signed repository package is not selected: $package"
 done
-grep -Fq 'usr/bin/spice-guest-tools' "$ROOT/bin/build-image" ||
-  fail "the image does not validate the SPICE guest-tools payload"
-pass "aarch64-virt consumes its adapted Limine and SPICE packages from the signed repository"
+pass "aarch64-virt consumes its adapted Limine package from the signed repository"
 
 grep -Fq 'plymouth-set-default-theme omarchy' "$ROOT/bin/build-image" ||
   fail "image assembly does not explicitly select the Omarchy boot theme"
@@ -408,7 +323,7 @@ grep -Fq 'usr/share/plymouth/themes/omarchy/omarchy.plymouth' "$ROOT/bin/build-i
 grep -Fq 'usr/bin/plymouthd' "$ROOT/bin/build-image" ||
   fail "image validation does not inspect the initramfs for Plymouth"
 grep -Fq 'console=ttyAMA0,115200 plymouth.ignore-serial-consoles' "$ROOT/bin/build-image" ||
-  fail "the QEMU serial console suppresses the graphical Plymouth splash"
+  fail "the virtual serial console does not suppress the graphical Plymouth splash"
 grep -Fq 'multi-user.target.wants/limine-snapper-sync.service' "$ROOT/bin/build-image" ||
   fail "image validation does not require Limine snapshot synchronization"
 grep -Fq 'stop_target_background_helpers || true' "$ROOT/bin/build-image" ||
@@ -437,51 +352,36 @@ grep -Eq '^\^linux-firmware\(\$\|-\)$' "$ROOT/profiles/aarch64-virt/remove-packa
   fail "aarch64-virt does not exclude linux-firmware and its split packages"
 grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce profile package removals"
-grep -Fq 'share            /mnt/hostshare     9p     trans=virtio,version=9p2000.L,rw,_netdev,nofail,auto 0 0' \
-  "$ROOT/bin/build-image" ||
-  fail "the image does not preconfigure QEMU host directory sharing"
-bash -n "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
-  fail "the hostshare UID/GID mapping helper has invalid shell syntax"
-bash -c '
-  source "$1"
-  [[ $(build_mapping 501 20 1000 1000) == "501/1000:@20/@1000" ]]
-  [[ -z $(build_mapping 1000 1000 1000 1000) ]]
-' _ "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
-  fail "the hostshare helper does not derive UID/GID mappings dynamically"
-grep -Fq 'target="$home/Hostshare"' \
-  "$ROOT/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/setup-hostshare" ||
-  fail "the mapped host share does not use the generic Hostshare name"
-grep -Fq 'After=omarchy-provision-owner.service mnt-hostshare.mount' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-  fail "the hostshare mapper does not wait for owner provisioning and the raw mount"
-grep -Fq 'Wants=mnt-hostshare.mount' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-  fail "the hostshare mapper does not pull the raw 9p mount into its transaction"
-grep -Fq 'Before=display-manager.service' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/omarchy-aarch64-hostshare.service" ||
-  fail "the hostshare mapper does not finish before desktop login"
-grep -Fq 'kernel/fs/9p/9p.ko' "$ROOT/bin/build-image" ||
-  fail "image validation does not require 9p filesystem support"
-grep -Fq 'kernel/net/9p/9pnet_virtio.ko' "$ROOT/bin/build-image" ||
-  fail "image validation does not require the VirtIO 9p transport"
+for removed in qemu-guest-agent spice-vdagent vulkan-virtio; do
+  ! grep -qx "$removed" "$ROOT/profiles/aarch64-virt/runtime-packages" ||
+    fail "EZVM-only profile still installs $removed"
+done
+! grep -qx 'omarchy-spice-guest-tools' "$ROOT/config/omarchy-packages.aarch64" ||
+  fail "EZVM-only profile still installs omarchy-spice-guest-tools"
+[[ ! -e $ROOT/utm ]] || fail "EZVM-only repository still contains a UTM template"
+[[ ! -e $ROOT/bin/package-utm-release ]] || fail "UTM release packager still exists"
+[[ ! -e $ROOT/bin/run-image ]] || fail "QEMU image runner still exists"
+if grep -R -E -i 'package-utm|\.qcow2|spice-guest|hostshare|[[:space:]]9p[[:space:]]' \
+  "$ROOT/bin" "$ROOT/config" "$ROOT/.github/workflows" >/dev/null ||
+  find "$ROOT/profiles" -type f ! -name remove-package-patterns -exec \
+    grep -E -i 'package-utm|\.qcow2|spice-guest|hostshare|[[:space:]]9p[[:space:]]' {} + \
+    >/dev/null; then
+  fail "EZVM-only runtime or release pipeline still contains UTM/QCOW2/SPICE/9p support"
+fi
+pass "EZVM-only profile excludes QEMU, UTM, SPICE, and 9p guest integration"
 grep -Fq -- '--continue-at -' "$ROOT/bin/build-image" ||
   fail "rolling image downloads cannot resume after interruption"
 grep -Fq 'partial="$2.part"' "$ROOT/bin/build-image" ||
   fail "rolling image downloads are not staged atomically"
 grep -Fq 'PACMAN_CACHE_DIR="$CACHE_DIR/pacman-aarch64"' "$ROOT/bin/build-image" ||
   fail "target package downloads are not retained across image build retries"
-grep -Fq 'reclaim_conversion_space' "$ROOT/bin/build-image" &&
+grep -Fq 'reclaim_packaging_space' "$ROOT/bin/build-image" &&
   grep -Fq 'OMARCHY_IMAGE_LOW_DISK=${OMARCHY_IMAGE_LOW_DISK:-0}' \
     "$ROOT/bin/build-image-container" ||
-  fail "CI cannot reclaim transient package caches before QCOW2 conversion"
+  fail "CI cannot reclaim transient package caches before sparse raw packaging"
 grep -Fq 'runs-on: ubuntu-24.04-arm' "$ROOT/.github/workflows/release-image.yml" ||
   fail "image Releases are not built on the native Ubuntu 24.04 ARM runner"
-grep -Fq "OMARCHY_UTM_CONSUME_IMAGE: '1'" "$ROOT/.github/workflows/release-image.yml" ||
-  fail "the release workflow retains the source QCOW2 while creating split assets"
-grep -Fq 'qemu-img check build/omarchy-aarch64-virt.qcow2' \
-  "$ROOT/.github/workflows/release-image.yml" ||
-  fail "the release workflow does not validate the finished QCOW2"
-grep -Fq -- '--format both' "$ROOT/.github/workflows/release-image.yml" &&
+grep -Fq 'omarchy-aarch64-ezvm.raw.sha256' "$ROOT/.github/workflows/release-image.yml" &&
   grep -Fq 'package-ezvm-release' "$ROOT/.github/workflows/release-image.yml" ||
   fail "the release workflow does not build and package the EZVM raw image"
 if grep -Fq 'actions/upload-artifact' "$ROOT/.github/workflows/release-image.yml"; then
@@ -490,16 +390,10 @@ fi
 grep -Fq 'uses: actions/cache/save@v6' "$ROOT/.github/workflows/release-image.yml" ||
   fail "verified rolling inputs are only cached after the entire Release succeeds"
 grep -Fq -- '--notes-file RELEASE_NOTES.md' "$ROOT/.github/workflows/release-image.yml" &&
-  grep -Fq 'releases/latest/download/install-Omarchy-virt.command' \
-    "$ROOT/RELEASE_NOTES.md" &&
-  grep -Fq 'releases/latest/download/install-Omarchy-virt.command' "$ROOT/README.md" &&
   grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/RELEASE_NOTES.md" &&
   grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/README.md" ||
   fail "GitHub Releases do not expose the one-command latest installer"
-grep -Fq 'efi_variable_storage: "omitted-and-created-by-utm"' \
-  "$ROOT/bin/package-utm-release" ||
-  fail "UTM release metadata does not promise clean firmware state"
-pass "native GitHub image publishing avoids duplicate artifacts and EFI state"
+pass "native GitHub image publishing emits only the verified EZVM image path"
 grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
 grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||
