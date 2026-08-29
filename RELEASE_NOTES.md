@@ -45,5 +45,5 @@ The Release is published only after:
 The image remains sparse after import, so its 64 GiB logical disk does not
 consume 64 GiB of physical host storage.
 
-The Release also includes build provenance and exact package inventories for
-auditing the Arch Linux ARM and signed Omarchy inputs.
+The build records provenance and exact package inventories during workflow
+verification of the Arch Linux ARM and signed Omarchy inputs.
