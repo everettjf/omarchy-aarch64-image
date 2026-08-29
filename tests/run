@@ -263,15 +263,18 @@ pass "AArch64 repository and exclusion manifests are disjoint"
     --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" \
     --argjson packages "$packages_json" '
       {
-        schema: 1,
+        schema: 2,
         generated_at: "2026-08-26T00:00:00Z",
         signing_fingerprint: $fingerprint,
         state: {
           schema: 1,
           architecture: "aarch64",
           channel: "stable",
+          input_sha256: ("a" * 64),
+          official_database: "https://pkgs.omarchy.org/stable/x86_64/omarchy.db.tar.zst",
           packages: $packages
-        }
+        },
+        packages: ($packages | map(.name + "-" + .version + "-aarch64.pkg.tar.zst"))
       }
     ' >"$fixture/repository-manifest.json"
   OMARCHY_SOURCE_COMMIT=$OMARCHY_AARCH64_REF

@@ -359,13 +359,18 @@ validate_omarchy_repository_manifest() {
 
   jq --exit-status \
     --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" '
-      .schema == 1
+      .schema == 2
       and .signing_fingerprint == $fingerprint
       and .state.schema == 1
       and .state.architecture == "aarch64"
       and .state.channel == "stable"
       and (.generated_at | type == "string" and length > 0)
+      and (.state.input_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+      and (.state.official_database | type == "string" and startswith("https://"))
       and (.state.packages | type == "array")
+      and (.packages | type == "array" and length > 0)
+      and (all(.packages[]; type == "string" and test("-(aarch64|any)\\.pkg\\.tar\\.zst$")))
+      and ((.packages | unique | length) == (.packages | length))
     ' "$manifest" >/dev/null ||
     fail "Omarchy repository manifest has an unsupported identity or schema"
 
