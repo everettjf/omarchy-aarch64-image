@@ -289,7 +289,27 @@ pass "AArch64 repository and exclusion manifests are disjoint"
   validate_omarchy_repository_manifest "$fixture/repository-manifest.json"
   [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == 4.0.1.r1.g"${OMARCHY_AARCH64_REF:0:12}"-1 ]] ||
     fail "repository/source version boundary was not captured"
-  pass "signed stable repository manifest is complete and matches the pinned Omarchy source"
+
+  jq -n \
+    --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" \
+    --arg source "$OMARCHY_AARCH64_REF" \
+    --argjson packages "$packages_json" '
+      {
+        schema: 1,
+        architecture: "aarch64",
+        channel: "stable",
+        commit: ("b" * 40),
+        generated_at: "2026-08-30T00:00:00Z",
+        signing_fingerprint: $fingerprint,
+        validation_mode: "incremental",
+        package_base_count: ($packages | length),
+        packages: ($packages | map(.name + "-" + .version + "-aarch64.pkg.tar.zst"))
+      }
+    ' >"$fixture/repository-manifest-v1.json"
+  validate_omarchy_repository_manifest "$fixture/repository-manifest-v1.json"
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == 4.0.1.r1.g"${OMARCHY_AARCH64_REF:0:12}"-1 ]] ||
+    fail "schema-1 repository/source version boundary was not captured"
+  pass "signed stable repository manifests are complete and match the pinned Omarchy source"
 )
 
 mapfile -t image_profiles < <(

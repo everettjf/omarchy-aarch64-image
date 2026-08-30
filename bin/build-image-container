@@ -16,6 +16,14 @@ fail() {
   exit 1
 }
 
+resolve_existing_path() {
+  local path=$1 resolved
+  [[ -e $path ]] || return 1
+  resolved=$(realpath -- "$path" 2>/dev/null) ||
+    resolved=$(realpath "$path" 2>/dev/null) || return 1
+  printf '%s\n' "$resolved"
+}
+
 command -v docker >/dev/null 2>&1 || fail "missing required command: docker"
 command -v realpath >/dev/null 2>&1 || fail "missing required command: realpath"
 [[ $(uname -m) == aarch64 || $(uname -m) == arm64 ]] ||
@@ -29,14 +37,14 @@ while (($#)); do
     --omarchy-source)
       (($# >= 2)) || fail "--omarchy-source requires a path"
       [[ -z $SOURCE_MOUNT ]] || fail "--omarchy-source may only be specified once"
-      SOURCE_MOUNT=$(realpath -e -- "$2") || fail "Omarchy source not found: $2"
+      SOURCE_MOUNT=$(resolve_existing_path "$2") || fail "Omarchy source not found: $2"
       CONTAINER_ARGS+=(--omarchy-source /omarchy-source)
       shift 2
       ;;
     --omarchy-repository)
       (($# >= 2)) || fail "--omarchy-repository requires a path"
       [[ -z $REPOSITORY_MOUNT ]] || fail "--omarchy-repository may only be specified once"
-      REPOSITORY_MOUNT=$(realpath -e -- "$2") || fail "Omarchy repository not found: $2"
+      REPOSITORY_MOUNT=$(resolve_existing_path "$2") || fail "Omarchy repository not found: $2"
       [[ -d $REPOSITORY_MOUNT ]] || fail "Omarchy repository is not a directory: $2"
       CONTAINER_ARGS+=(--omarchy-repository /omarchy-repository)
       shift 2
@@ -44,7 +52,7 @@ while (($#)); do
     --ezvm-guest-agent)
       (($# >= 2)) || fail "--ezvm-guest-agent requires a path"
       [[ -z $AGENT_MOUNT ]] || fail "--ezvm-guest-agent may only be specified once"
-      AGENT_MOUNT=$(realpath -e -- "$2") || fail "EZVM guest agent not found: $2"
+      AGENT_MOUNT=$(resolve_existing_path "$2") || fail "EZVM guest agent not found: $2"
       [[ -f $AGENT_MOUNT ]] || fail "EZVM guest agent is not a file: $2"
       CONTAINER_ARGS+=(--ezvm-guest-agent /ezvm-agent)
       shift 2
