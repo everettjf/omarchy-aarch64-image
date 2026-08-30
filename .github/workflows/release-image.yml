@@ -40,6 +40,8 @@ jobs:
           echo "omarchy_ref=$OMARCHY_AARCH64_REF" >> "$GITHUB_OUTPUT"
           echo "packages_url=$OMARCHY_PKGS_AARCH64_URL" >> "$GITHUB_OUTPUT"
           echo "packages_ref=$OMARCHY_PKGS_AARCH64_REF" >> "$GITHUB_OUTPUT"
+          echo "ezvm_agent_url=$EZVM_GUEST_AGENT_URL" >> "$GITHUB_OUTPUT"
+          echo "ezvm_agent_ref=$EZVM_GUEST_AGENT_REF" >> "$GITHUB_OUTPUT"
           echo "cache_week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned Omarchy source
@@ -57,6 +59,29 @@ jobs:
           ref: ${{ steps.sources.outputs.packages_ref }}
           path: build/dependencies/omarchy-pkgs-aarch64
           persist-credentials: false
+
+      - name: Checkout pinned EZVM guest-agent source
+        uses: actions/checkout@v7
+        with:
+          repository: everettjf/ezvm
+          ref: ${{ steps.sources.outputs.ezvm_agent_ref }}
+          path: build/dependencies/ezvm
+          persist-credentials: false
+
+      - name: Build pinned EZVM guest agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/dependencies/ezvm-agent
+          (
+            cd build/dependencies/ezvm/GuestAgent/linux
+            go test ./...
+            GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+              -trimpath -ldflags '-s -w -X main.version=image' \
+              -o ../../../ezvm-agent/ezvm-agent .
+          )
+          file build/dependencies/ezvm-agent/ezvm-agent |
+            grep -q 'ELF 64-bit.*ARM aarch64.*statically linked'
 
       - name: Restore verified rolling inputs
         id: input-cache
@@ -111,6 +136,7 @@ jobs:
           set -euo pipefail
           ./bin/build-image-container \
             --omarchy-source build/dependencies/omarchy-aarch64 \
+            --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
             --force
           (cd build && sha256sum --check omarchy-aarch64-ezvm.raw.sha256)
           df -h /

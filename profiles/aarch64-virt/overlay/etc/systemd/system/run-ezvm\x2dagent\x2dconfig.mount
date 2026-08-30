@@ -1,0 +1,12 @@
+[Unit]
+Description=EZVM guest-agent enrollment
+Before=ezvm-agent.service
+
+[Mount]
+What=ezvm-agent
+Where=/run/ezvm-agent-config
+Type=virtiofs
+Options=ro,nodev,nosuid,noexec
+
+[Install]
+WantedBy=multi-user.target

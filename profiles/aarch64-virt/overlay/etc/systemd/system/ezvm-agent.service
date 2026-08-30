@@ -1,0 +1,20 @@
+[Unit]
+Description=EZVM Guest Agent
+Requires=run-ezvm\x2dagent\x2dconfig.mount
+After=run-ezvm\x2dagent\x2dconfig.mount systemd-modules-load.service
+Before=omarchy-provision-owner.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ezvm-agent --config /run/ezvm-agent-config/config.json
+Restart=always
+RestartSec=1
+User=root
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run
+
+[Install]
+WantedBy=multi-user.target

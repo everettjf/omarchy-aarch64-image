@@ -456,6 +456,21 @@ grep -Fq 'mount -o remount,bind,ro "$MOUNT_DIR/run/omarchy-aarch64-repository"' 
   fail "the local development repository is writable inside the image chroot"
 grep -Fq 'root_owned_paths=(' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce trusted rootfs directory ownership"
+grep -Fq 'virtiofs?' "$ROOT/bin/build-image" ||
+  fail "image build does not keep virtiofs available for the EZVM enrollment share"
+grep -Fq 'uinput?' "$ROOT/bin/build-image" ||
+  fail "image build does not keep uinput available for early guest input"
+grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
+  fail "image build does not require the pinned EZVM guest agent"
+grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "release workflow does not bake the pinned EZVM guest agent"
+grep -Fq 'What=ezvm-agent' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-ezvm\\x2dagent\\x2dconfig.mount" ||
+  fail "image does not mount the host-provided EZVM enrollment share"
+grep -Fq 'Before=omarchy-provision-owner.service' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
+  fail "EZVM guest agent is not ordered before first-user provisioning"
 pass "container isolation, mount cleanup, ownership, and repository update boundaries are guarded"
 
 grep -q '^ConditionPathExists=/var/lib/omarchy/provisioning/pending$' \

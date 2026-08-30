@@ -8,6 +8,7 @@ readonly BUILDER_IMAGE=${OMARCHY_AARCH64_BUILDER_IMAGE:-omarchy-pkg-builder:late
 
 SOURCE_MOUNT=""
 REPOSITORY_MOUNT=""
+AGENT_MOUNT=""
 CONTAINER_ARGS=()
 
 fail() {
@@ -40,6 +41,14 @@ while (($#)); do
       CONTAINER_ARGS+=(--omarchy-repository /omarchy-repository)
       shift 2
       ;;
+    --ezvm-guest-agent)
+      (($# >= 2)) || fail "--ezvm-guest-agent requires a path"
+      [[ -z $AGENT_MOUNT ]] || fail "--ezvm-guest-agent may only be specified once"
+      AGENT_MOUNT=$(realpath -e -- "$2") || fail "EZVM guest agent not found: $2"
+      [[ -f $AGENT_MOUNT ]] || fail "EZVM guest agent is not a file: $2"
+      CONTAINER_ARGS+=(--ezvm-guest-agent /ezvm-agent)
+      shift 2
+      ;;
     *)
       CONTAINER_ARGS+=("$1")
       shift
@@ -56,6 +65,9 @@ if [[ -n $SOURCE_MOUNT ]]; then
 fi
 if [[ -n $REPOSITORY_MOUNT ]]; then
   DOCKER_ARGS+=(--mount "type=bind,source=$REPOSITORY_MOUNT,target=/omarchy-repository,readonly")
+fi
+if [[ -n $AGENT_MOUNT ]]; then
+  DOCKER_ARGS+=(--mount "type=bind,source=$AGENT_MOUNT,target=/ezvm-agent,readonly")
 fi
 
 exec docker "${DOCKER_ARGS[@]}" \

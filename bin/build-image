@@ -28,6 +28,7 @@ ROOTFS_SIGNATURE=""
 ROOTFS_KEYRING=""
 ROOTFS_VERIFY_KEYRING=""
 NODE_TARBALL=""
+EZVM_GUEST_AGENT_BINARY=""
 OMARCHY_REPOSITORY_MANIFEST=""
 OMARCHY_REPOSITORY_KEY=""
 OMARCHY_REPOSITORY_GENERATED_AT=""
@@ -82,6 +83,7 @@ Options:
   --rootfs-signature P   Detached signature for --rootfs
   --rootfs-keyring PATH  Arch Linux ARM GPG keyring
   --node-tarball PATH    Use a local linux-arm64 Node.js archive
+  --ezvm-guest-agent P   Statically linked EZVM linux-arm64 guest agent
   --refresh              Refresh cached rolling downloads
   --force                Replace the exact requested output path(s)
   -h, --help             Show this help
@@ -182,6 +184,11 @@ parse_args() {
         NODE_TARBALL=$(absolute_path "$2")
         shift 2
         ;;
+      --ezvm-guest-agent)
+        (($# >= 2)) || fail "--ezvm-guest-agent requires a path"
+        EZVM_GUEST_AGENT_BINARY=$(absolute_path "$2")
+        shift 2
+        ;;
       --refresh)
         REFRESH=1
         shift
@@ -215,6 +222,11 @@ validate_configuration() {
     [[ -f $PROFILE_DIR/$profile_file ]] || fail "profile is missing $profile_file: $IMAGE_PROFILE"
   done
   [[ $IMAGE_FORMAT == raw ]] || fail "the EZVM profile only supports sparse raw images"
+  [[ -n $EZVM_GUEST_AGENT_BINARY && -f $EZVM_GUEST_AGENT_BINARY ]] ||
+    fail "--ezvm-guest-agent must name the statically linked linux-arm64 agent"
+  file "$EZVM_GUEST_AGENT_BINARY" |
+    grep -q 'ELF 64-bit.*ARM aarch64.*statically linked' ||
+    fail "EZVM guest agent must be a statically linked AArch64 ELF executable"
 
   image_bytes=$(numfmt --from=iec "$IMAGE_SIZE") || fail "invalid image size: $IMAGE_SIZE"
   ((image_bytes >= 16 * 1024 * 1024 * 1024)) || fail "image size must be at least 16 GiB"
@@ -853,7 +865,7 @@ configure_base_system() {
 
   install -d -m755 "$MOUNT_DIR/etc/mkinitcpio.conf.d"
   cat >"$MOUNT_DIR/etc/mkinitcpio.conf.d/99-omarchy-aarch64-virt.conf" <<'EOF'
-MODULES+=(virtio? virtio_pci? virtio_mmio? virtio_blk? virtio_scsi? virtio_net? virtio_gpu? virtio_rng?)
+MODULES+=(virtio? virtio_pci? virtio_mmio? virtio_blk? virtio_scsi? virtio_net? virtio_gpu? virtio_rng? virtiofs? uinput?)
 EOF
 
   # The project tree is commonly bind-mounted from an unprivileged host user.
@@ -862,6 +874,7 @@ EOF
   # /usr. Since image assembly runs as root, copied overlay entries become
   # root-owned while the existing rootfs ownership remains intact.
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
+  install -m755 "$EZVM_GUEST_AGENT_BINARY" "$MOUNT_DIR/usr/local/sbin/ezvm-agent"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
   install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
@@ -871,6 +884,7 @@ EOF
   read_list "$CONFIG_DIR/omarchy-packages.aarch64" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
+  target_chroot systemctl enable run-ezvm\\x2dagent\\x2dconfig.mount ezvm-agent.service
 }
 
 apply_profile_shell_defaults() {
@@ -1058,6 +1072,7 @@ validate_target() {
     etc/limine-entry-tool.d/omarchy-uki.conf
     etc/mkinitcpio.conf.d/omarchy_hooks.conf
     etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
+    etc/modules-load.d/ezvm-agent.conf
     etc/omarchy-aarch64/excluded-packages
     etc/omarchy-aarch64/profile
     etc/pacman.d/omarchy-aarch64.conf
@@ -1066,10 +1081,13 @@ validate_target() {
     etc/snapper/configs/root
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
+    etc/systemd/system/multi-user.target.wants/ezvm-agent.service
+    etc/systemd/system/multi-user.target.wants/run-ezvm\\x2dagent\\x2dconfig.mount
     usr/bin/omarchy-provision-owner
     usr/bin/limine-mkinitcpio
     usr/bin/limine-snapper-sync
     usr/local/sbin/omarchy-ezvm-ensure-bootable
+    usr/local/sbin/ezvm-agent
     usr/share/libalpm/hooks/zzzz-omarchy-ezvm-boot-fallback.hook
     usr/share/omarchy-aarch64/repository-manifest.json
     usr/share/pacman/keyrings/omarchy-aarch64.gpg
