@@ -1,0 +1,13 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = linux
+Target = limine
+Target = limine-mkinitcpio-hook
+Target = omarchy
+
+[Action]
+Description = Refreshing the EZVM emergency boot fallback...
+When = PostTransaction
+Exec = /usr/local/sbin/omarchy-ezvm-ensure-bootable

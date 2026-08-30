@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+uki=/boot/EFI/Linux/omarchy_linux.efi
+fallback=/boot/EFI/BOOT/BOOTAA64.EFI
+temporary=${fallback}.new
+
+[[ -s $uki ]] || {
+  echo "Omarchy UKI is unavailable: $uki" >&2
+  exit 1
+}
+
+install -d -m755 "${fallback%/*}"
+install -m644 "$uki" "$temporary"
+mv -f "$temporary" "$fallback"

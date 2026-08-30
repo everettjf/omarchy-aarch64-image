@@ -321,6 +321,16 @@ grep -Fq 'LIMINE_FORCE_UEFI=yes limine-update' "$ROOT/bin/build-image" ||
   fail "image assembly does not build the AArch64 UKI inside its offline chroot"
 grep -Fq 'boot/EFI/Linux/omarchy_linux.efi' "$ROOT/bin/build-image" ||
   fail "image validation does not require the stable Omarchy UKI"
+grep -Fq 'omarchy-ezvm-ensure-bootable' "$ROOT/bin/build-image" ||
+  fail "image assembly does not install a direct Omarchy UKI fallback"
+grep -Fq 'EFI/BOOT/BOOTAA64.EFI' "$ROOT/bin/build-image" ||
+  fail "image validation does not require the standard AArch64 EFI fallback"
+grep -Fq 'Target = limine' \
+  "$ROOT/profiles/aarch64-virt/overlay/usr/share/libalpm/hooks/zzzz-omarchy-ezvm-boot-fallback.hook" ||
+  fail "system updates do not refresh the EZVM EFI fallback"
+grep -Fq 'EFI/Linux/omarchy_linux.efi' \
+  "$ROOT/profiles/aarch64-virt/overlay/usr/local/sbin/omarchy-ezvm-ensure-bootable" ||
+  fail "the fallback repair helper does not source the Omarchy UKI"
 grep -Fq "grep -Eq '^==> ERROR:|^ERROR:'" "$ROOT/bin/build-image" ||
   fail "native AArch64 image assembly accepts UKI build errors"
 grep -Fq '== thunderbolt' \
