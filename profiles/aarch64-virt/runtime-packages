@@ -17,6 +17,7 @@ pipewire-audio
 pipewire-jack
 pipewire-pulse
 snapper
+spice-vdagent
 sudo
 vulkan-swrast
 wireplumber

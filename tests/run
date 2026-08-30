@@ -243,7 +243,7 @@ fi
       qemu-guest-agent sof-firmware spice-vdagent vulkan-virtio
   }
   mapfile -t removed < <(resolve_profile_removed_packages)
-  [[ ${removed[*]} == "bindfs dhcpcd ex-vi-compat haveged linux-firmware linux-firmware-amdgpu nano net-tools netctl omarchy-spice-guest-tools qemu-guest-agent sof-firmware spice-vdagent vulkan-virtio" ]] ||
+  [[ ${removed[*]} == "bindfs dhcpcd ex-vi-compat haveged linux-firmware linux-firmware-amdgpu nano net-tools netctl qemu-guest-agent sof-firmware vulkan-virtio" ]] ||
     fail "profile removal rules selected: ${removed[*]}"
   pass "aarch64-virt owns its VM desktop, audio stack, shell, and package-removal policy"
 )
@@ -373,23 +373,25 @@ grep -Eq '^\^linux-firmware\(\$\|-\)$' "$ROOT/profiles/aarch64-virt/remove-packa
   fail "aarch64-virt does not exclude linux-firmware and its split packages"
 grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce profile package removals"
-for removed in qemu-guest-agent spice-vdagent vulkan-virtio; do
+for removed in qemu-guest-agent vulkan-virtio; do
   ! grep -qx "$removed" "$ROOT/profiles/aarch64-virt/runtime-packages" ||
     fail "EZVM-only profile still installs $removed"
 done
-! grep -qx 'omarchy-spice-guest-tools' "$ROOT/config/omarchy-packages.aarch64" ||
-  fail "EZVM-only profile still installs omarchy-spice-guest-tools"
+grep -qx 'spice-vdagent' "$ROOT/profiles/aarch64-virt/runtime-packages" ||
+  fail "EZVM profile does not install the SPICE desktop agent"
+grep -qx 'omarchy-spice-guest-tools' "$ROOT/config/omarchy-packages.aarch64" ||
+  fail "EZVM profile does not install Omarchy's SPICE session integration"
 [[ ! -e $ROOT/utm ]] || fail "EZVM-only repository still contains a UTM template"
 [[ ! -e $ROOT/bin/package-utm-release ]] || fail "UTM release packager still exists"
 [[ ! -e $ROOT/bin/run-image ]] || fail "QEMU image runner still exists"
-if grep -R -E -i 'package-utm|\.qcow2|spice-guest|hostshare|[[:space:]]9p[[:space:]]' \
+if grep -R -E -i 'package-utm|\.qcow2|hostshare|[[:space:]]9p[[:space:]]' \
   "$ROOT/bin" "$ROOT/config" "$ROOT/.github/workflows" >/dev/null ||
   find "$ROOT/profiles" -type f ! -name remove-package-patterns -exec \
-    grep -E -i 'package-utm|\.qcow2|spice-guest|hostshare|[[:space:]]9p[[:space:]]' {} + \
+    grep -E -i 'package-utm|\.qcow2|hostshare|[[:space:]]9p[[:space:]]' {} + \
     >/dev/null; then
   fail "EZVM-only runtime or release pipeline still contains UTM/QCOW2/SPICE/9p support"
 fi
-pass "EZVM-only profile excludes QEMU, UTM, SPICE, and 9p guest integration"
+pass "EZVM profile retains SPICE clipboard support while excluding QEMU, UTM, and 9p integration"
 grep -Fq -- '--continue-at -' "$ROOT/bin/build-image" ||
   fail "rolling image downloads cannot resume after interruption"
 grep -Fq 'partial="$2.part"' "$ROOT/bin/build-image" ||

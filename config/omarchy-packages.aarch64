@@ -5,6 +5,7 @@ limine-mkinitcpio-hook
 limine-snapper-sync
 omarchy-settings
 omarchy
+omarchy-spice-guest-tools
 aether
 cliamp
 dotnet-runtime-bin
