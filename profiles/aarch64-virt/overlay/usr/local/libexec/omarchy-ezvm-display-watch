@@ -11,6 +11,26 @@ readonly LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.lock"
 readonly DRM_ROOT="${OMARCHY_EZVM_DRM_ROOT:-/sys/class/drm}"
 readonly HYPRCTL="${OMARCHY_EZVM_HYPRCTL:-hyprctl}"
 readonly POLL_INTERVAL="${OMARCHY_EZVM_POLL_INTERVAL:-1}"
+readonly LOG_FILE="${OMARCHY_EZVM_LOG:-}"
+
+log_debug() {
+  [[ -n $LOG_FILE ]] || return 0
+  printf '%(%FT%T%z)T %s\n' -1 "$*" >>"$LOG_FILE"
+}
+
+discover_hyprland_instance() {
+  local socket instance_dir
+  [[ -n ${OMARCHY_EZVM_HYPRCTL:-} ]] && return 0
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && return 0
+  for socket in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/hypr/*/.socket.sock; do
+    [[ -S $socket ]] || continue
+    instance_dir=${socket%/.socket.sock}
+    export HYPRLAND_INSTANCE_SIGNATURE=${instance_dir##*/}
+    log_debug "discovered Hyprland instance $HYPRLAND_INSTANCE_SIGNATURE"
+    return 0
+  done
+  return 1
+}
 
 uses_virtio_gpu() {
   local device driver
@@ -43,17 +63,28 @@ reload_preferred_mode() {
     # user's own monitor configuration a few times without replacing it.
     for delay in 0 0.15 0.5 1.25; do
       sleep "$delay"
-      "$HYPRCTL" reload >/dev/null 2>&1 || true
+      discover_hyprland_instance || continue
+      if output=$("$HYPRCTL" reload 2>&1); then
+        log_debug "hyprctl reload succeeded: $output"
+      else
+        log_debug "hyprctl reload failed: $output"
+      fi
     done
   ) 9>"$LOCK" &
 }
 
 uses_virtio_gpu || exit 0
 
+# A host resize may have completed before this user-session helper starts. An
+# initial reload handles that boot/login race; later reloads follow mode-list
+# changes without continuously disturbing Hyprland.
+reload_preferred_mode
 previous=$(mode_signature)
+log_debug "initial DRM signature: $previous"
 while sleep "$POLL_INTERVAL"; do
   current=$(mode_signature)
   if [[ $current != "$previous" ]]; then
+    log_debug "DRM signature changed: $current"
     previous=$current
     reload_preferred_mode
   fi
