@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# virtio-gpu reports a host resize as a changed mode list on the existing DRM
+# connector. Hyprland's normal monitor event stream does not emit monitoradded
+# or monitorremoved for that case, so re-evaluate Omarchy's existing
+# `mode = "preferred"` configuration whenever the list changes.
+
+set -u
+
+readonly LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.lock"
+readonly DRM_ROOT="${OMARCHY_EZVM_DRM_ROOT:-/sys/class/drm}"
+readonly HYPRCTL="${OMARCHY_EZVM_HYPRCTL:-hyprctl}"
+readonly POLL_INTERVAL="${OMARCHY_EZVM_POLL_INTERVAL:-1}"
+
+uses_virtio_gpu() {
+  local device driver
+  for device in "$DRM_ROOT"/card*/device; do
+    [[ -e $device ]] || continue
+    driver=$(readlink -f "$device/driver" 2>/dev/null || true)
+    [[ ${driver##*/} == virtio_gpu ]] && return 0
+  done
+  return 1
+}
+
+mode_signature() {
+  local connector line signature=""
+  for connector in "$DRM_ROOT"/card*-*; do
+    [[ -f $connector/status ]] || continue
+    signature+="${connector##*/}:"
+    while IFS= read -r line; do signature+="$line,"; done <"$connector/status"
+    if [[ -f $connector/modes ]]; then
+      while IFS= read -r line; do signature+="$line,"; done <"$connector/modes"
+    fi
+    signature+=';'
+  done
+  printf '%s\n' "$signature"
+}
+
+reload_preferred_mode() {
+  (
+    flock -n 9 || exit 0
+    # The kernel, compositor and shell settle independently. Re-evaluate the
+    # user's own monitor configuration a few times without replacing it.
+    for delay in 0 0.15 0.5 1.25; do
+      sleep "$delay"
+      "$HYPRCTL" reload >/dev/null 2>&1 || true
+    done
+  ) 9>"$LOCK" &
+}
+
+uses_virtio_gpu || exit 0
+
+previous=$(mode_signature)
+while sleep "$POLL_INTERVAL"; do
+  current=$(mode_signature)
+  if [[ $current != "$previous" ]]; then
+    previous=$current
+    reload_preferred_mode
+  fi
+done

@@ -511,6 +511,52 @@ grep -Fq 'virtiofs?' "$ROOT/bin/build-image" ||
   fail "image build does not keep virtiofs available for the EZVM enrollment share"
 grep -Fq 'uinput?' "$ROOT/bin/build-image" ||
   fail "image build does not keep uinput available for early guest input"
+
+display_watch="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-watch"
+monitor_wrapper="$ROOT/profiles/aarch64-virt/overlay/usr/local/bin/omarchy-hyprland-monitor-watch"
+[[ -x $display_watch && -x $monitor_wrapper ]] ||
+  fail "EZVM Hyprland display watcher is not executable"
+grep -Fq 'virtio_gpu' "$display_watch" ||
+  fail "EZVM display watcher is not restricted to virtio-gpu"
+grep -Fq '"$DRM_ROOT"/card*-*' "$display_watch" ||
+  fail "EZVM display watcher does not observe DRM mode changes"
+grep -Fq 'hyprctl reload' "$display_watch" ||
+  fail "EZVM display watcher does not re-evaluate preferred modes"
+grep -Fq '/usr/bin/omarchy-hyprland-monitor-watch' "$monitor_wrapper" ||
+  fail "EZVM monitor wrapper does not retain Omarchy monitor recovery"
+
+(
+  fixture=$(mktemp -d)
+  watcher_pid=
+  trap '[[ -z $watcher_pid ]] || kill "$watcher_pid" 2>/dev/null || true; rm -rf "$fixture"' EXIT
+  mkdir -p "$fixture/drm/card0/device" "$fixture/drivers/virtio_gpu" "$fixture/drm/card0-Virtual-1"
+  ln -s "$fixture/drivers/virtio_gpu" "$fixture/drm/card0/device/driver"
+  printf 'connected\n' >"$fixture/drm/card0-Virtual-1/status"
+  printf '1920x1080\n' >"$fixture/drm/card0-Virtual-1/modes"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"$OMARCHY_EZVM_HYPRCTL_LOG"\n' >"$fixture/hyprctl"
+  chmod 755 "$fixture/hyprctl"
+
+  OMARCHY_EZVM_DRM_ROOT="$fixture/drm" \
+    OMARCHY_EZVM_HYPRCTL="$fixture/hyprctl" \
+    OMARCHY_EZVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
+    OMARCHY_EZVM_POLL_INTERVAL=0.05 \
+    XDG_RUNTIME_DIR="$fixture" \
+    "$display_watch" &
+  watcher_pid=$!
+  sleep 0.1
+  printf '2560x1440\n1920x1080\n' >"$fixture/drm/card0-Virtual-1/modes"
+  for _ in {1..40}; do
+    [[ -s $fixture/hyprctl.log ]] && break
+    sleep 0.05
+  done
+  [[ -s $fixture/hyprctl.log ]] || fail "EZVM display watcher did not react to a mode-list change"
+  grep -Fxq reload "$fixture/hyprctl.log" ||
+    fail "EZVM display watcher did not ask Hyprland to reload preferred mode"
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  watcher_pid=
+)
+pass "EZVM display watcher reacts to virtio-gpu mode changes"
 grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
   fail "image build does not require the pinned EZVM guest agent"
 grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \

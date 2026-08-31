@@ -966,6 +966,7 @@ stage_first_boot_provisioning() {
   # names, and needs neither D-Bus nor the network. Patch both picker branches
   # in the pinned runtime copy and fail the image build if the upstream shape
   # changes, rather than silently shipping the looping form again.
+  # shellcheck disable=SC2016 # This is shell source inserted into setup-form.sh.
   local timezone_source='awk '\''!/^#/ { print $3 }'\'' /usr/share/zoneinfo/zone1970.tab | sort -u'
   local timezone_occurrences
   timezone_occurrences=$(grep -Fc 'timedatectl list-timezones' "$setup_form")

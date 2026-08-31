@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Keep Omarchy's monitor recovery behavior and add the EZVM virtio-gpu mode
+# watcher beside it. /usr/local/bin precedes /usr/bin in the Omarchy session,
+# so the existing autostart entry reaches this profile-specific wrapper.
+
+set -u
+
+/usr/local/libexec/omarchy-ezvm-display-watch &
+display_watch_pid=$!
+
+cleanup() {
+  kill "$display_watch_pid" 2>/dev/null || true
+  wait "$display_watch_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+/usr/bin/omarchy-hyprland-monitor-watch
