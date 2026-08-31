@@ -43,6 +43,35 @@ bash -n "$OMARCHY_TEST_SOURCE/install/post-install/pacman.sh"
     fail "image build does not enforce sparse raw output"
 pass "all project and modified runtime scripts parse as Bash"
 
+(
+  # shellcheck source=../bin/build-image
+  source "$ROOT/bin/build-image"
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+
+  MOUNT_DIR="$fixture/root"
+  NODE_TARBALL="$fixture/node.tar.gz"
+  mkdir -p \
+    "$MOUNT_DIR/usr/bin" \
+    "$MOUNT_DIR/usr/share/omarchy/install/provisioning"
+  touch "$NODE_TARBALL"
+  printf '#!/bin/sh\n' >"$MOUNT_DIR/usr/bin/omarchy-provision-owner"
+  chmod 755 "$MOUNT_DIR/usr/bin/omarchy-provision-owner"
+  touch "$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
+  cp "$OMARCHY_TEST_SOURCE/install/provisioning/setup-form.sh" \
+    "$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
+
+  stage_first_boot_provisioning
+
+  setup_form="$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
+  ! grep -Fq 'timedatectl list-timezones' "$setup_form" ||
+    fail "staged first-boot form still queries timezones through D-Bus"
+  [[ $(grep -Fc "zone1970.tab | sort -u" "$setup_form") == 2 ]] ||
+    fail "staged first-boot form does not use the local timezone database twice"
+  bash -n "$setup_form"
+  pass "first-boot timezone picker is independent of the system bus"
+)
+
 
 (
   fixture=$(mktemp -d)
@@ -493,6 +522,10 @@ grep -Fq 'What=ezvm-agent' \
 grep -Fq 'Before=omarchy-provision-owner.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "EZVM guest agent is not ordered before first-user provisioning"
+grep -Fq "zone1970.tab | sort -u" "$ROOT/bin/build-image" ||
+  fail "first-boot timezone selection still depends on the early system bus"
+grep -Fq "expected two timedatectl timezone picker inputs" "$ROOT/bin/build-image" ||
+  fail "timezone picker patch does not fail closed when the fork changes"
 pass "container isolation, mount cleanup, ownership, and repository update boundaries are guarded"
 
 grep -q '^ConditionPathExists=/var/lib/omarchy/provisioning/pending$' \

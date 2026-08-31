@@ -947,12 +947,32 @@ apply_omarchy_system() {
 stage_first_boot_provisioning() {
   local provisioning="$MOUNT_DIR/var/lib/omarchy/provisioning"
   local unit_source="$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
+  local setup_form="$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
   local unit_target="$MOUNT_DIR/etc/systemd/system/omarchy-provision-owner.service"
   local wants="$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
   [[ -x $MOUNT_DIR/usr/bin/omarchy-provision-owner ]] ||
     fail "the fork package does not contain omarchy-provision-owner"
   [[ -f $unit_source ]] || fail "the fork package does not contain the provisioning unit"
+  [[ -f $setup_form ]] || fail "the fork package does not contain the provisioning form"
+
+  # `timedatectl list-timezones` opens the system bus in current systemd
+  # releases. First-boot provisioning can reach this prompt before that bus is
+  # accepting connections, leaving gum with an empty input stream. The form
+  # then reports a generic non-zero status, which its caller interprets as
+  # "back", and the owner is sent to the keyboard page indefinitely.
+  #
+  # zone1970.tab is shipped by tzdata, contains the canonical selectable zone
+  # names, and needs neither D-Bus nor the network. Patch both picker branches
+  # in the pinned runtime copy and fail the image build if the upstream shape
+  # changes, rather than silently shipping the looping form again.
+  local timezone_source='awk '\''!/^#/ { print $3 }'\'' /usr/share/zoneinfo/zone1970.tab | sort -u'
+  local timezone_occurrences
+  timezone_occurrences=$(grep -Fc 'timedatectl list-timezones' "$setup_form")
+  ((timezone_occurrences == 2)) ||
+    fail "expected two timedatectl timezone picker inputs, found $timezone_occurrences"
+  sed -i.bak "s@timedatectl list-timezones@$timezone_source@g" "$setup_form"
+  rm -f -- "$setup_form.bak"
 
   install -d -m755 "$provisioning/packages" "$wants"
   install -m644 "$NODE_TARBALL" "$provisioning/packages/${NODE_TARBALL##*/}"
