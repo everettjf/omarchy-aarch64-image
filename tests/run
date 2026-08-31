@@ -513,17 +513,57 @@ grep -Fq 'uinput?' "$ROOT/bin/build-image" ||
   fail "image build does not keep uinput available for early guest input"
 
 display_watch="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-watch"
+display_setup="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-setup"
 monitor_wrapper="$ROOT/profiles/aarch64-virt/overlay/usr/local/bin/omarchy-hyprland-monitor-watch"
-[[ -x $display_watch && -x $monitor_wrapper ]] ||
-  fail "EZVM Hyprland display watcher is not executable"
+session_monitor_wrapper="$ROOT/profiles/aarch64-virt/overlay/usr/bin/omarchy-hyprland-monitor-watch"
+display_watch_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-ezvm-display-watch.service"
+display_setup_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-ezvm-display-setup.service"
+display_watch_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-display-bridge.service.d/90-ezvm-virtio-display.conf"
+display_setup_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-guest-tools-bootstrap.service.d/90-ezvm-display-owner.conf"
+spice_config="$ROOT/profiles/aarch64-virt/overlay/usr/share/spice-guest-tools/config/config.toml"
+sddm_hyprland="$ROOT/profiles/aarch64-virt/overlay/usr/share/sddm/hyprland.lua"
+[[ -x $display_watch && -x $display_setup && -x $monitor_wrapper && -x $session_monitor_wrapper ]] ||
+  fail "EZVM Hyprland display integration is not executable"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-watch' "$display_watch_unit" ||
+  fail "EZVM does not ship an independent virtio-gpu display watcher unit"
+grep -Fq 'Requires=omarchy-ezvm-display-setup.service' "$display_watch_unit" ||
+  fail "EZVM display watcher does not require display ownership setup"
+! grep -Eq 'Condition(PathExists|Environment)=' "$display_watch_unit" ||
+  fail "EZVM display watcher must not inherit SPICE or imported-environment conditions"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-setup' "$display_setup_unit" ||
+  fail "EZVM does not ship an independent display ownership setup unit"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-watch' "$display_watch_dropin" ||
+  fail "EZVM does not replace the enabled SPICE display bridge with its virtio-gpu watcher"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-setup' "$display_setup_dropin" ||
+  fail "EZVM does not replace SPICE bootstrap with its display ownership migration"
+grep -Fq 'remove_spice_monitor_ownership' "$display_setup" ||
+  fail "EZVM display migration does not remove stale SPICE monitor ownership"
+awk '
+  /^\[display\]$/ { section = "display"; next }
+  /^\[clipboard\]$/ { section = "clipboard"; next }
+  /^\[/ { section = "" }
+  section == "display" && $0 == "enabled = false" { display_disabled = 1 }
+  section == "clipboard" && $0 == "enabled = true" { clipboard_enabled = 1 }
+  END { exit !(display_disabled && clipboard_enabled) }
+' "$spice_config" || fail "EZVM must disable SPICE display while preserving clipboard"
 grep -Fq 'virtio_gpu' "$display_watch" ||
   fail "EZVM display watcher is not restricted to virtio-gpu"
 grep -Fq '"$DRM_ROOT"/card*-*' "$display_watch" ||
   fail "EZVM display watcher does not observe DRM mode changes"
 grep -Fq 'hyprctl reload' "$display_watch" ||
   fail "EZVM display watcher does not re-evaluate preferred modes"
+grep -Fq 'hl.monitor({' "$display_watch" ||
+  fail "EZVM display watcher does not reconcile Hyprland with the DRM preferred mode"
+grep -Fq '/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream' "$session_monitor_wrapper" ||
+  fail "EZVM session monitor wrapper does not retain Omarchy monitor recovery"
+grep -Fq '/usr/local/libexec/omarchy-ezvm-display-setup' "$session_monitor_wrapper" ||
+  fail "EZVM monitor wrapper does not migrate existing SPICE display ownership"
 grep -Fq '/usr/bin/omarchy-hyprland-monitor-watch' "$monitor_wrapper" ||
-  fail "EZVM monitor wrapper does not retain Omarchy monitor recovery"
+  fail "EZVM compatibility monitor wrapper does not delegate to the session entry point"
+grep -Fq '/usr/local/libexec/omarchy-ezvm-display-watch' "$sddm_hyprland" ||
+  fail "EZVM SDDM greeter does not start dynamic virtio-gpu display reconciliation"
+grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
+  fail "EZVM SDDM greeter does not select the host-provided preferred mode"
 
 (
   fixture=$(mktemp -d)
@@ -539,24 +579,96 @@ grep -Fq '/usr/bin/omarchy-hyprland-monitor-watch' "$monitor_wrapper" ||
   OMARCHY_EZVM_DRM_ROOT="$fixture/drm" \
     OMARCHY_EZVM_HYPRCTL="$fixture/hyprctl" \
     OMARCHY_EZVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
+    OMARCHY_EZVM_LOG="$fixture/display-watch.log" \
     OMARCHY_EZVM_POLL_INTERVAL=0.05 \
     XDG_RUNTIME_DIR="$fixture" \
     "$display_watch" &
   watcher_pid=$!
   sleep 0.1
+  : >"$fixture/hyprctl.log"
   printf '2560x1440\n1920x1080\n' >"$fixture/drm/card0-Virtual-1/modes"
   for _ in {1..40}; do
-    [[ -s $fixture/hyprctl.log ]] && break
+    if grep -Fxq reload "$fixture/hyprctl.log" 2>/dev/null &&
+      grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" 2>/dev/null; then
+      break
+    fi
     sleep 0.05
   done
   [[ -s $fixture/hyprctl.log ]] || fail "EZVM display watcher did not react to a mode-list change"
   grep -Fxq reload "$fixture/hyprctl.log" ||
     fail "EZVM display watcher did not ask Hyprland to reload preferred mode"
+  grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" ||
+    { sed -n '1,120p' "$fixture/hyprctl.log" >&2
+      fail "EZVM display watcher did not apply the new DRM preferred mode to Hyprland"; }
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  watcher_pid=
+
+  rm "$fixture/drm/card0/device/driver"
+  mkdir -p "$fixture/drivers/virtio-pci" "$fixture/modules/virtio_gpu"
+  ln -s "$fixture/drivers/virtio-pci" "$fixture/drm/card0/device/driver"
+  ln -s "$fixture/modules/virtio_gpu" "$fixture/drivers/virtio-pci/module"
+  : >"$fixture/hyprctl.log"
+  OMARCHY_EZVM_DRM_ROOT="$fixture/drm" \
+    OMARCHY_EZVM_HYPRCTL="$fixture/hyprctl" \
+    OMARCHY_EZVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
+    OMARCHY_EZVM_LOG="$fixture/display-watch.log" \
+    OMARCHY_EZVM_POLL_INTERVAL=0.05 \
+    XDG_RUNTIME_DIR="$fixture" \
+    "$display_watch" &
+  watcher_pid=$!
+  for _ in {1..20}; do
+    [[ -s $fixture/hyprctl.log ]] && break
+    sleep 0.05
+  done
+  [[ -s $fixture/hyprctl.log ]] ||
+    fail "EZVM display watcher rejected a virtio-pci device backed by virtio_gpu"
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
   watcher_pid=
 )
 pass "EZVM display watcher reacts to virtio-gpu mode changes"
+
+(
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  mkdir -p "$fixture/home/.config/hypr" "$fixture/home/.config/spice-guest-tools" \
+    "$fixture/home/.local/state/spice-guest-tools" "$fixture/bin"
+  cat >"$fixture/home/.config/hypr/monitors.lua" <<'EOF'
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+
+-- BEGIN spice-guest-tools managed mode
+hl.monitor({ output = "Virtual-1", mode = "modeline stale", position = "0x0", scale = 2 })
+-- END spice-guest-tools managed mode
+EOF
+  cat >"$fixture/home/.config/spice-guest-tools/config.toml" <<'EOF'
+[display]
+enabled = true
+output = "auto"
+
+[clipboard]
+enabled = true
+EOF
+  : >"$fixture/home/.local/state/spice-guest-tools/display.state"
+  printf '#!/bin/bash\nexit 0\n' >"$fixture/bin/systemctl"
+  printf '#!/bin/bash\nexit 0\n' >"$fixture/bin/hyprctl"
+  chmod 755 "$fixture/bin/systemctl" "$fixture/bin/hyprctl"
+  HOME="$fixture/home" PATH="$fixture/bin:$PATH" "$display_setup"
+  ! grep -Fq 'spice-guest-tools managed mode' "$fixture/home/.config/hypr/monitors.lua" ||
+    fail "EZVM display migration left SPICE monitor ownership behind"
+  grep -Fq 'mode = "preferred"' "$fixture/home/.config/hypr/monitors.lua" ||
+    fail "EZVM display migration damaged the Omarchy preferred monitor rule"
+  awk '
+    /^\[display\]$/ { section = "display"; next }
+    /^\[/ { section = "" }
+    section == "display" && $0 == "enabled = false" { found = 1 }
+    END { exit !found }
+  ' "$fixture/home/.config/spice-guest-tools/config.toml" ||
+    fail "EZVM display migration did not disable the SPICE display bridge"
+  [[ ! -e $fixture/home/.local/state/spice-guest-tools/display.state ]] ||
+    fail "EZVM display migration retained a stale SPICE modeline"
+)
+pass "EZVM display migration preserves clipboard while removing SPICE mode ownership"
 grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
   fail "image build does not require the pinned EZVM guest agent"
 grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \

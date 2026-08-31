@@ -8,14 +8,20 @@
 set -u
 
 readonly LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.lock"
+readonly INSTANCE_LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.instance.lock"
 readonly DRM_ROOT="${OMARCHY_EZVM_DRM_ROOT:-/sys/class/drm}"
 readonly HYPRCTL="${OMARCHY_EZVM_HYPRCTL:-hyprctl}"
 readonly POLL_INTERVAL="${OMARCHY_EZVM_POLL_INTERVAL:-1}"
-readonly LOG_FILE="${OMARCHY_EZVM_LOG:-}"
+readonly LOG_FILE="${OMARCHY_EZVM_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-ezvm-display-watch.log}"
 
 log_debug() {
-  [[ -n $LOG_FILE ]] || return 0
-  printf '%(%FT%T%z)T %s\n' -1 "$*" >>"$LOG_FILE"
+  # Keep the volatile per-session file for quick local inspection, but also
+  # write to stdout so the user service records the same evidence in the
+  # persistent journal.  Display failures otherwise disappear at shutdown,
+  # precisely when an offline image inspection is most useful.
+  local line
+  printf -v line '%(%FT%T%z)T %s' -1 "$*"
+  printf '%s\n' "$line" | tee -a "$LOG_FILE"
 }
 
 discover_hyprland_instance() {
@@ -33,11 +39,18 @@ discover_hyprland_instance() {
 }
 
 uses_virtio_gpu() {
-  local device driver
+  local device driver module
+  # On a real virtio-pci device the DRM card's immediate driver link may name
+  # virtio-pci, while its module link identifies the actual DRM implementation.
+  # Accept either representation. The module directory is also a reliable
+  # fallback when sysfs does not expose a per-device module link.
+  [[ $DRM_ROOT == /sys/class/drm && -d /sys/module/virtio_gpu ]] && return 0
   for device in "$DRM_ROOT"/card*/device; do
     [[ -e $device ]] || continue
     driver=$(readlink -f "$device/driver" 2>/dev/null || true)
     [[ ${driver##*/} == virtio_gpu ]] && return 0
+    module=$(readlink -f "$device/driver/module" 2>/dev/null || true)
+    [[ ${module##*/} == virtio_gpu ]] && return 0
   done
   return 1
 }
@@ -73,7 +86,51 @@ reload_preferred_mode() {
   ) 9>"$LOCK" &
 }
 
-uses_virtio_gpu || exit 0
+reconcile_current_mode() {
+  local connector connector_name preferred current
+  discover_hyprland_instance || return 0
+  for connector in "$DRM_ROOT"/card*-*; do
+    [[ -f $connector/status && $(<"$connector/status") == connected ]] || continue
+    [[ -s $connector/modes ]] || continue
+    connector_name=${connector##*/}
+    connector_name=${connector_name#card*-}
+    preferred=$(head -n 1 "$connector/modes")
+    [[ $preferred =~ ^[0-9]+x[0-9]+$ ]] || continue
+    [[ $connector_name =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    current=$("$HYPRCTL" -j monitors all 2>/dev/null | jq -r --arg name "$connector_name" \
+      '.[] | select(.name == $name) | "\(.width)x\(.height)"' 2>/dev/null | head -n 1)
+    [[ $current == "$preferred" ]] && continue
+
+    # Reloading a `preferred` monitor rule is not sufficient on every Hyprland
+    # release: after a virtio-gpu hotplug it can retain the old current mode
+    # even though the new preferred mode is already first in DRM sysfs. Apply
+    # that exact mode at runtime, while leaving the user's persisted config
+    # untouched. The next poll verifies that the compositor accepted it.
+    # Current Omarchy uses Hyprland's Lua configuration parser. `keyword`
+    # prints a rejection while still exiting zero there, so use the same
+    # `hyprctl eval` API as Omarchy's own monitor helpers.
+    if output=$("$HYPRCTL" eval \
+      "hl.monitor({ output = \"$connector_name\", mode = \"$preferred\", position = \"auto\", scale = \"auto\" })" 2>&1); then
+      log_debug "requested $connector_name mode $preferred (was ${current:-unknown}): $output"
+    else
+      log_debug "failed to apply $connector_name mode $preferred (was ${current:-unknown}): $output"
+    fi
+  done
+}
+
+install -d -m 0700 "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
+log_debug "watcher starting: drm_root=$DRM_ROOT"
+exec 8>"$INSTANCE_LOCK"
+if ! flock -n 8; then
+  log_debug "another display watcher already owns $INSTANCE_LOCK; exiting"
+  exit 0
+fi
+if ! uses_virtio_gpu; then
+  log_debug "no virtio_gpu DRM device found; watcher exiting"
+  exit 0
+fi
+log_debug "virtio_gpu DRM device detected"
 
 # A host resize may have completed before this user-session helper starts. An
 # initial reload handles that boot/login race; later reloads follow mode-list
@@ -88,4 +145,5 @@ while sleep "$POLL_INTERVAL"; do
     previous=$current
     reload_preferred_mode
   fi
+  reconcile_current_mode
 done

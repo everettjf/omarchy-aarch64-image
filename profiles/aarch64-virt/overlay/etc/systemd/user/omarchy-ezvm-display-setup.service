@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize EZVM virtio-gpu display ownership
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/bin:%h/.local/bin
+ExecStart=/usr/local/libexec/omarchy-ezvm-display-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,15 @@
+[integration]
+backend = "auto"
+
+[display]
+# EZVM's custom virtio-gpu device owns display modes. Keep the SPICE channel
+# only for clipboard transport; VZSpiceAgentPortAttachment cannot resize the
+# custom scanout and its persisted modeline would override DRM preferred mode.
+enabled = false
+output = "auto"
+
+[clipboard]
+enabled = true
+max_bytes = 104857600
+max_pixels = 67108864
+derived_formats = ["image/png"]

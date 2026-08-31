@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Preserve SPICE clipboard transport while transferring virtual-display
+# ownership to EZVM's virtio-gpu device. omarchy-spice-guest-tools otherwise
+# persists a VZ SPICE modeline in monitors.lua, which overrides DRM preferred
+# modes after a host window resize.
+
+set -euo pipefail
+
+readonly CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+readonly STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+readonly MONITORS_FILE="$CONFIG_HOME/hypr/monitors.lua"
+readonly SPICE_CONFIG="$CONFIG_HOME/spice-guest-tools/config.toml"
+
+remove_spice_monitor_ownership() {
+  [[ -f $MONITORS_FILE ]] || return 0
+  local temporary
+  temporary=$(mktemp "${MONITORS_FILE}.XXXXXX")
+  awk '
+    $0 == "-- BEGIN spice-guest-tools managed mode" { managed = 1; next }
+    $0 == "-- END spice-guest-tools managed mode" { managed = 0; next }
+    !managed { print }
+  ' "$MONITORS_FILE" >"$temporary"
+  if cmp -s "$temporary" "$MONITORS_FILE"; then
+    rm -f "$temporary"
+  else
+    chmod --reference="$MONITORS_FILE" "$temporary"
+    mv -f "$temporary" "$MONITORS_FILE"
+  fi
+}
+
+disable_spice_display_bridge() {
+  if [[ ! -f $SPICE_CONFIG ]]; then
+    install -d -m 0700 "$(dirname "$SPICE_CONFIG")"
+    install -m 0600 /usr/share/spice-guest-tools/config/config.toml "$SPICE_CONFIG"
+  fi
+  local temporary
+  temporary=$(mktemp "${SPICE_CONFIG}.XXXXXX")
+  awk '
+    /^\[display\][[:space:]]*$/ { in_display = 1; found = 1; print; next }
+    /^\[/ {
+      if (in_display && !wrote_enabled) print "enabled = false"
+      in_display = 0
+    }
+    in_display && /^[[:space:]]*enabled[[:space:]]*=/ {
+      if (!wrote_enabled) print "enabled = false"
+      wrote_enabled = 1
+      next
+    }
+    { print }
+    END {
+      if (in_display && !wrote_enabled) print "enabled = false"
+      if (!found) print "\n[display]\nenabled = false"
+    }
+  ' "$SPICE_CONFIG" >"$temporary"
+  chmod --reference="$SPICE_CONFIG" "$temporary"
+  mv -f "$temporary" "$SPICE_CONFIG"
+}
+
+remove_spice_monitor_ownership
+disable_spice_display_bridge
+rm -f "$STATE_HOME/spice-guest-tools/display.state"
+systemctl --user stop spice-display-bridge.service 2>/dev/null || true
+hyprctl reload >/dev/null 2>&1 || true
