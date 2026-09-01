@@ -716,7 +716,8 @@ grep -q '^ConditionPathExists=/var/lib/omarchy/provisioning/pending$' \
 bash "$OMARCHY_TEST_SOURCE/test/shell.d/aarch64-runtime-test.sh"
 pass "fork exposes the deferred AArch64 VM runtime contract"
 
-if rg -n 'asahi-alarm|grub-install' "$ROOT/bin" "$ROOT/config" "$ROOT/profiles" >/dev/null; then
+if grep -R -nE 'asahi-alarm|grub-install' \
+  "$ROOT/bin" "$ROOT/config" "$ROOT/profiles" >/dev/null; then
   fail "retired Apple/Asahi/GRUB installation logic remains active"
 fi
 pass "active image orchestration is independent of Apple, Asahi, and GRUB"
@@ -727,14 +728,14 @@ grep -Fq 'target_chroot pacman-key --lsign-key "$OMARCHY_AARCH64_SIGNING_FINGERP
   "$ROOT/bin/build-image" || fail "repository bootstrap key is not locally trusted"
 grep -Fq 'pre-refresh-pacman.d/omarchy-aarch64-repository' "$ROOT/bin/build-image" ||
   fail "Omarchy pacman refreshes can discard the AArch64 repository"
-if rg -n 'omarchy-mac/omarchy-pkgs-aarch64|OMARCHY_AARCH64_RELEASE_URL|pacman -U' \
+if grep -R -nE 'omarchy-mac/omarchy-pkgs-aarch64|OMARCHY_AARCH64_RELEASE_URL|pacman -U' \
   "$ROOT/bin" "$ROOT/config" "$ROOT/sources.env" >/dev/null; then
   fail "retired unsigned/local package installation remains active"
 fi
 pass "the signed AArch64 repository remains enabled across system and Omarchy updates"
 
 nested_source_pattern='[$]PROJECT_ROOT/omarchy-aarch64|[$]ROOT/omarchy-aarch64'
-if rg -n "$nested_source_pattern" \
+if grep -R -nE "$nested_source_pattern" \
   "$ROOT/bin" "$ROOT/lib" "$ROOT/tests" >/dev/null; then
   fail "the image project still assumes a nested Omarchy source checkout"
 fi

@@ -1000,6 +1000,7 @@ stage_first_boot_provisioning() {
   # console signature and recentres on every resize. Stop after that static
   # paint, which also removes needless setup-time CPU/GPU work.
   local ttfx_occurrences
+  # shellcheck disable=SC2016 # Match the literal variable reference in the staged script.
   ttfx_occurrences=$(grep -Fc 'ttfx -i "$LOGO_PATH"' "$owner")
   ((ttfx_occurrences == 1)) ||
     fail "expected one first-boot ttfx greeter invocation, found $ttfx_occurrences"
