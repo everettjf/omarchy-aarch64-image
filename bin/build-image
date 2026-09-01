@@ -918,6 +918,10 @@ EOF
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
   target_chroot systemctl enable run-ezvm\\x2dagent\\x2dconfig.mount ezvm-agent.service
+  # systemd 261.2's userspace OOM daemon reproducibly traps with SIGILL under
+  # Apple Virtualization.framework's AArch64 CPU model. PID 1 then propagates
+  # the signal and freezes the VM. The kernel OOM killer remains available.
+  target_chroot systemctl mask systemd-oomd.service systemd-oomd.socket
   # This display path is independent of SPICE.  Enable dedicated user units
   # globally so an EZVM virtio-gpu session does not inherit SPICE port or
   # WAYLAND_DISPLAY conditions from optional clipboard integration services.
@@ -957,12 +961,13 @@ apply_omarchy_system() {
 
 stage_first_boot_provisioning() {
   local provisioning="$MOUNT_DIR/var/lib/omarchy/provisioning"
+  local owner="$MOUNT_DIR/usr/bin/omarchy-provision-owner"
   local unit_source="$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   local setup_form="$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
   local unit_target="$MOUNT_DIR/etc/systemd/system/omarchy-provision-owner.service"
   local wants="$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
-  [[ -x $MOUNT_DIR/usr/bin/omarchy-provision-owner ]] ||
+  [[ -x $owner ]] ||
     fail "the fork package does not contain omarchy-provision-owner"
   [[ -f $unit_source ]] || fail "the fork package does not contain the provisioning unit"
   [[ -f $setup_form ]] || fail "the fork package does not contain the provisioning form"
@@ -985,6 +990,21 @@ stage_first_boot_provisioning() {
     fail "expected two timedatectl timezone picker inputs, found $timezone_occurrences"
   sed -i.bak "s@timedatectl list-timezones@$timezone_source@g" "$setup_form"
   rm -f -- "$setup_form.bak"
+
+  # The upstream first-boot greeter repaints its logo at 60 FPS with ttfx.
+  # On a virtual framebuffer a VT geometry notification kills and restarts
+  # that animation. ttfx then reuses the old DEC cursor canvas and can paint
+  # the 81-column logo from a stale horizontal origin, clipping it even though
+  # virtio-gpu's scanout remains a valid 1280x720 surface. EZVM does not need a
+  # continuously animated setup logo: the static renderer already watches the
+  # console signature and recentres on every resize. Stop after that static
+  # paint, which also removes needless setup-time CPU/GPU work.
+  local ttfx_occurrences
+  ttfx_occurrences=$(grep -Fc 'ttfx -i "$LOGO_PATH"' "$owner")
+  ((ttfx_occurrences == 1)) ||
+    fail "expected one first-boot ttfx greeter invocation, found $ttfx_occurrences"
+  perl -0pi.bak -e 's{^(\s*)ttfx -i "\$LOGO_PATH"}{$1return 0 # EZVM: keep the first-boot greeter static and resize-safe.\n$1ttfx -i "\$LOGO_PATH"}m' "$owner"
+  rm -f -- "$owner.bak"
 
   install -d -m755 "$provisioning/packages" "$wants"
   install -m644 "$NODE_TARBALL" "$provisioning/packages/${NODE_TARBALL##*/}"
@@ -1143,6 +1163,8 @@ validate_target() {
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
     etc/systemd/system/multi-user.target.wants/ezvm-agent.service
     etc/systemd/system/multi-user.target.wants/run-ezvm\\x2dagent\\x2dconfig.mount
+    etc/systemd/system/systemd-oomd.service
+    etc/systemd/system/systemd-oomd.socket
     usr/bin/omarchy-provision-owner
     usr/bin/limine-mkinitcpio
     usr/bin/limine-snapper-sync

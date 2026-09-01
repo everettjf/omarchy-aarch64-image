@@ -55,7 +55,8 @@ pass "all project and modified runtime scripts parse as Bash"
     "$MOUNT_DIR/usr/bin" \
     "$MOUNT_DIR/usr/share/omarchy/install/provisioning"
   touch "$NODE_TARBALL"
-  printf '#!/bin/sh\n' >"$MOUNT_DIR/usr/bin/omarchy-provision-owner"
+  cp "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner" \
+    "$MOUNT_DIR/usr/bin/omarchy-provision-owner"
   chmod 755 "$MOUNT_DIR/usr/bin/omarchy-provision-owner"
   touch "$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   cp "$OMARCHY_TEST_SOURCE/install/provisioning/setup-form.sh" \
@@ -69,7 +70,11 @@ pass "all project and modified runtime scripts parse as Bash"
   [[ $(grep -Fc "zone1970.tab | sort -u" "$setup_form") == 2 ]] ||
     fail "staged first-boot form does not use the local timezone database twice"
   bash -n "$setup_form"
-  pass "first-boot timezone picker is independent of the system bus"
+  owner="$MOUNT_DIR/usr/bin/omarchy-provision-owner"
+  [[ $(grep -Fc 'EZVM: keep the first-boot greeter static and resize-safe' "$owner") == 1 ]] ||
+    fail "staged first-boot greeter still runs its resize-unsafe animation"
+  bash -n "$owner"
+  pass "first-boot form is bus-independent and its greeter is resize-safe"
 )
 
 
@@ -604,6 +609,10 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
   watcher_pid=
+  # The watcher may be inside its short external `sleep` when terminated. That
+  # child briefly inherits the flock descriptor, so wait for one poll interval
+  # before asserting that a replacement instance can acquire the lock.
+  sleep 0.1
 
   rm "$fixture/drm/card0/device/driver"
   mkdir -p "$fixture/drivers/virtio-pci" "$fixture/modules/virtio_gpu"
@@ -681,6 +690,9 @@ grep -Fq 'What=ezvm-agent' \
 grep -Fq 'Before=omarchy-provision-owner.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "EZVM guest agent is not ordered before first-user provisioning"
+grep -Fq 'systemctl mask systemd-oomd.service systemd-oomd.socket' \
+  "$ROOT/bin/build-image" ||
+  fail "VZ image does not mask the systemd-oomd SIGILL activation paths"
 ezvm_input_rules="$ROOT/profiles/aarch64-virt/overlay/etc/udev/rules.d/70-ezvm-input.rules"
 grep -Fq 'ATTRS{name}=="EZVM Keyboard"' "$ezvm_input_rules" ||
   fail "EZVM keyboard is not classified for the graphical seat"
