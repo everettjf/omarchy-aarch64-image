@@ -693,6 +693,10 @@ grep -Fq 'Before=omarchy-provision-owner.service' \
 grep -Fq 'systemctl mask systemd-oomd.service systemd-oomd.socket' \
   "$ROOT/bin/build-image" ||
   fail "VZ image does not mask the systemd-oomd SIGILL activation paths"
+apply_system_line=$(grep -n '^  apply_omarchy_system$' "$ROOT/bin/build-image" | cut -d: -f1)
+mask_services_line=$(grep -n '^  mask_incompatible_target_services$' "$ROOT/bin/build-image" | cut -d: -f1)
+[[ -n $apply_system_line && -n $mask_services_line && $mask_services_line -gt $apply_system_line ]] ||
+  fail "incompatible services are masked before Omarchy finishes enabling services"
 ezvm_input_rules="$ROOT/profiles/aarch64-virt/overlay/etc/udev/rules.d/70-ezvm-input.rules"
 grep -Fq 'ATTRS{name}=="EZVM Keyboard"' "$ezvm_input_rules" ||
   fail "EZVM keyboard is not classified for the graphical seat"

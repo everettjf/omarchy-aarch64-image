@@ -918,15 +918,19 @@ EOF
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
   target_chroot systemctl enable run-ezvm\\x2dagent\\x2dconfig.mount ezvm-agent.service
-  # systemd 261.2's userspace OOM daemon reproducibly traps with SIGILL under
-  # Apple Virtualization.framework's AArch64 CPU model. PID 1 then propagates
-  # the signal and freezes the VM. The kernel OOM killer remains available.
-  target_chroot systemctl mask systemd-oomd.service systemd-oomd.socket
   # This display path is independent of SPICE.  Enable dedicated user units
   # globally so an EZVM virtio-gpu session does not inherit SPICE port or
   # WAYLAND_DISPLAY conditions from optional clipboard integration services.
   target_chroot systemctl --global enable \
     omarchy-ezvm-display-setup.service omarchy-ezvm-display-watch.service
+}
+
+mask_incompatible_target_services() {
+  # Omarchy's system setup enables systemd-oomd, so this must run afterwards.
+  # systemd 261.2's userspace OOM daemon reproducibly traps with SIGILL under
+  # Apple Virtualization.framework's AArch64 CPU model. PID 1 then propagates
+  # the signal and freezes the VM. The kernel OOM killer remains available.
+  target_chroot systemctl mask systemd-oomd.service systemd-oomd.socket
 }
 
 apply_profile_shell_defaults() {
@@ -1448,6 +1452,7 @@ main() {
   install_packages
   configure_base_system
   apply_omarchy_system
+  mask_incompatible_target_services
   # omarchy-apply-system restores the target pacman template. Layer the signed
   # AArch64 repository back on it and provision the refresh hook for the owner.
   write_omarchy_repository_configuration
