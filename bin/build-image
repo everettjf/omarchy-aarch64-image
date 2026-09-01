@@ -903,6 +903,7 @@ EOF
   # UWSM's graphical application environment does not include /usr/local/bin
   # in this image. Preserve the package implementation before the EZVM profile
   # overlays the exact /usr/bin autostart entry point.
+  install -d -m755 "$MOUNT_DIR/usr/local/libexec"
   install -m755 "$MOUNT_DIR/usr/bin/omarchy-hyprland-monitor-watch" \
     "$MOUNT_DIR/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream"
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
@@ -1131,6 +1132,7 @@ validate_target() {
     etc/mkinitcpio.conf.d/omarchy_hooks.conf
     etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
     etc/modules-load.d/ezvm-agent.conf
+    etc/udev/rules.d/70-ezvm-input.rules
     etc/omarchy-aarch64/excluded-packages
     etc/omarchy-aarch64/profile
     etc/pacman.d/omarchy-aarch64.conf

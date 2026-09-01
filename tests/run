@@ -511,6 +511,8 @@ grep -Fq 'virtiofs?' "$ROOT/bin/build-image" ||
   fail "image build does not keep virtiofs available for the EZVM enrollment share"
 grep -Fq 'uinput?' "$ROOT/bin/build-image" ||
   fail "image build does not keep uinput available for early guest input"
+grep -Fq 'install -d -m755 "$MOUNT_DIR/usr/local/libexec"' "$ROOT/bin/build-image" ||
+  fail "image build does not create the local libexec directory before preserving Omarchy's monitor watcher"
 
 display_watch="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-watch"
 display_setup="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-setup"
@@ -550,10 +552,10 @@ grep -Fq 'virtio_gpu' "$display_watch" ||
   fail "EZVM display watcher is not restricted to virtio-gpu"
 grep -Fq '"$DRM_ROOT"/card*-*' "$display_watch" ||
   fail "EZVM display watcher does not observe DRM mode changes"
-grep -Fq 'hyprctl reload' "$display_watch" ||
-  fail "EZVM display watcher does not re-evaluate preferred modes"
 grep -Fq 'hl.monitor({' "$display_watch" ||
   fail "EZVM display watcher does not reconcile Hyprland with the DRM preferred mode"
+! grep -Fq '"$HYPRCTL" reload' "$display_watch" ||
+  fail "EZVM display watcher must not race exact mode reconciliation with repeated Hyprland reloads"
 grep -Fq '/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream' "$session_monitor_wrapper" ||
   fail "EZVM session monitor wrapper does not retain Omarchy monitor recovery"
 grep -Fq '/usr/local/libexec/omarchy-ezvm-display-setup' "$session_monitor_wrapper" ||
@@ -588,18 +590,17 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
   : >"$fixture/hyprctl.log"
   printf '2560x1440\n1920x1080\n' >"$fixture/drm/card0-Virtual-1/modes"
   for _ in {1..40}; do
-    if grep -Fxq reload "$fixture/hyprctl.log" 2>/dev/null &&
-      grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" 2>/dev/null; then
+    if grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" 2>/dev/null; then
       break
     fi
     sleep 0.05
   done
   [[ -s $fixture/hyprctl.log ]] || fail "EZVM display watcher did not react to a mode-list change"
-  grep -Fxq reload "$fixture/hyprctl.log" ||
-    fail "EZVM display watcher did not ask Hyprland to reload preferred mode"
   grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" ||
     { sed -n '1,120p' "$fixture/hyprctl.log" >&2
       fail "EZVM display watcher did not apply the new DRM preferred mode to Hyprland"; }
+  ! grep -Fxq reload "$fixture/hyprctl.log" ||
+    fail "EZVM display watcher raced exact mode reconciliation with a Hyprland reload"
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
   watcher_pid=
@@ -680,6 +681,17 @@ grep -Fq 'What=ezvm-agent' \
 grep -Fq 'Before=omarchy-provision-owner.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "EZVM guest agent is not ordered before first-user provisioning"
+ezvm_input_rules="$ROOT/profiles/aarch64-virt/overlay/etc/udev/rules.d/70-ezvm-input.rules"
+grep -Fq 'ATTRS{name}=="EZVM Keyboard"' "$ezvm_input_rules" ||
+  fail "EZVM keyboard is not classified for the graphical seat"
+grep -Fq 'ENV{ID_INPUT_KEYBOARD}="1"' "$ezvm_input_rules" ||
+  fail "EZVM keyboard does not advertise its libinput class"
+grep -Fq 'ATTRS{name}=="EZVM Relative Pointer"' "$ezvm_input_rules" ||
+  fail "EZVM relative pointer is not classified for the graphical seat"
+grep -Fq 'ATTRS{name}=="EZVM Absolute Pointer"' "$ezvm_input_rules" ||
+  fail "EZVM absolute pointer is not classified for the graphical seat"
+grep -Fq 'etc/udev/rules.d/70-ezvm-input.rules' "$ROOT/bin/build-image" ||
+  fail "target validation does not require the EZVM input rules"
 grep -Fq "zone1970.tab | sort -u" "$ROOT/bin/build-image" ||
   fail "first-boot timezone selection still depends on the early system bus"
 grep -Fq "expected two timedatectl timezone picker inputs" "$ROOT/bin/build-image" ||

@@ -7,7 +7,6 @@
 
 set -u
 
-readonly LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.lock"
 readonly INSTANCE_LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.instance.lock"
 readonly DRM_ROOT="${OMARCHY_EZVM_DRM_ROOT:-/sys/class/drm}"
 readonly HYPRCTL="${OMARCHY_EZVM_HYPRCTL:-hyprctl}"
@@ -69,23 +68,6 @@ mode_signature() {
   printf '%s\n' "$signature"
 }
 
-reload_preferred_mode() {
-  (
-    flock -n 9 || exit 0
-    # The kernel, compositor and shell settle independently. Re-evaluate the
-    # user's own monitor configuration a few times without replacing it.
-    for delay in 0 0.15 0.5 1.25; do
-      sleep "$delay"
-      discover_hyprland_instance || continue
-      if output=$("$HYPRCTL" reload 2>&1); then
-        log_debug "hyprctl reload succeeded: $output"
-      else
-        log_debug "hyprctl reload failed: $output"
-      fi
-    done
-  ) 9>"$LOCK" &
-}
-
 reconcile_current_mode() {
   local connector connector_name preferred current
   discover_hyprland_instance || return 0
@@ -132,10 +114,12 @@ if ! uses_virtio_gpu; then
 fi
 log_debug "virtio_gpu DRM device detected"
 
-# A host resize may have completed before this user-session helper starts. An
-# initial reload handles that boot/login race; later reloads follow mode-list
-# changes without continuously disturbing Hyprland.
-reload_preferred_mode
+# A host resize may have completed before this user-session helper starts.
+# Reconcile the exact DRM preferred mode directly. Repeated `hyprctl reload`
+# calls race with this setting on current Omarchy: each reload can restore the
+# compositor's cached old `preferred` mode, causing old/new scanouts to flap
+# until Hyprland eventually leaves the new output black.
+reconcile_current_mode
 previous=$(mode_signature)
 log_debug "initial DRM signature: $previous"
 while sleep "$POLL_INTERVAL"; do
@@ -143,7 +127,10 @@ while sleep "$POLL_INTERVAL"; do
   if [[ $current != "$previous" ]]; then
     log_debug "DRM signature changed: $current"
     previous=$current
-    reload_preferred_mode
+    # Give virtio-gpu's connector and mode list a short interval to settle,
+    # then apply the final preferred mode once. The normal reconciliation below
+    # retries only if Hyprland did not accept it.
+    sleep 0.2
   fi
   reconcile_current_mode
 done

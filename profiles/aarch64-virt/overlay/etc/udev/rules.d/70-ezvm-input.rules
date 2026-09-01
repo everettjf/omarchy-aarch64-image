@@ -1,0 +1,6 @@
+# EZVM's authenticated guest agent creates these devices before the graphical
+# session starts. Classify and attach them to seat0 explicitly so a root-owned
+# uinput producer remains available to an unprivileged Wayland compositor.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="EZVM Keyboard", ENV{ID_INPUT}="1", ENV{ID_INPUT_KEY}="1", ENV{ID_INPUT_KEYBOARD}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="EZVM Relative Pointer", ENV{ID_INPUT}="1", ENV{ID_INPUT_MOUSE}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="EZVM Absolute Pointer", ENV{ID_INPUT}="1", ENV{ID_INPUT_TABLET}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess"
