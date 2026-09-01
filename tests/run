@@ -86,6 +86,13 @@ pass "all project and modified runtime scripts parse as Bash"
     --tag v4.0.1-test.1 \
     --image "$fixture/test.raw" \
     --output "$fixture/release" >/dev/null
+  first_archive_sha=$(jq -r '.archive.sha256' "$fixture/release/ezvm-release-manifest.json")
+  OMARCHY_EZVM_PART_SIZE_MIB=1 "$ROOT/bin/package-ezvm-release" \
+    --tag v4.0.1-test.1 \
+    --image "$fixture/test.raw" \
+    --output "$fixture/release" >/dev/null
+  [[ $(jq -r '.archive.sha256' "$fixture/release/ezvm-release-manifest.json") == \
+    "$first_archive_sha" ]] || fail "EZVM release compression is not reproducible"
   (cd "$fixture/release" && sha256sum --check SHA256SUMS >/dev/null) ||
     fail "EZVM release asset checksums are invalid"
   bash -n "$fixture/release/install-Omarchy-ezvm.command"

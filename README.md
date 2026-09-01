@@ -174,6 +174,9 @@ A complete release additionally requires a native AArch64 image build, checksum
 verification, EZVM import, boot, first-run provisioning, shutdown, restart, and
 forced-stop recovery testing.
 
+See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) for the complete
+publish, public-download, recovery, and end-to-end acceptance procedure.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

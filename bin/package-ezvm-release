@@ -44,15 +44,29 @@ done
 mkdir -p "$OUTPUT_DIR"
 prefix="$OUTPUT_DIR/Omarchy-ezvm.sparse.gz.part-"
 rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
-  "$OUTPUT_DIR/ezvm-release-manifest.json" "$OUTPUT_DIR/Omarchy-thumbnail.png"
+  "$OUTPUT_DIR/ezvm-release-manifest.json" "$OUTPUT_DIR/Omarchy-thumbnail.png" \
+  "$OUTPUT_DIR/image-provenance.txt" "$OUTPUT_DIR"/*.all-packages.txt \
+  "$OUTPUT_DIR"/*.explicit-packages.txt "$OUTPUT_DIR"/*.orphans.txt \
+  "$OUTPUT_DIR"/*.packages.tsv "$OUTPUT_DIR"/*.raw.sha256
 
 install -m644 "$THUMBNAIL_PATH" "$OUTPUT_DIR/Omarchy-thumbnail.png"
+image_stem=${IMAGE_PATH%.raw}
+for metadata in \
+  "$image_stem.all-packages.txt" \
+  "$image_stem.explicit-packages.txt" \
+  "$image_stem.orphans.txt" \
+  "$image_stem.packages.tsv" \
+  "$image_stem.raw.sha256"; do
+  [[ -s $metadata ]] && install -m644 "$metadata" "$OUTPUT_DIR/${metadata##*/}"
+done
+provenance=${IMAGE_PATH%/*}/image-provenance.txt
+[[ -f $provenance ]] && install -m644 "$provenance" "$OUTPUT_DIR/image-provenance.txt"
 thumbnail_sha=$(sha256sum "$OUTPUT_DIR/Omarchy-thumbnail.png" | awk '{print $1}')
 thumbnail_size=$(file_size "$OUTPUT_DIR/Omarchy-thumbnail.png")
 
 printf 'Encoding the EZVM sparse stream, compressing, and splitting…\n'
 "$PROJECT_ROOT/bin/encode-ezvm-sparse" "$IMAGE_PATH" |
-  gzip -1 |
+  gzip -1 -n |
   split -d -a 2 -b "${PART_SIZE_MIB}m" - "$prefix"
 
 parts=()
