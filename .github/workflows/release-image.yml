@@ -10,6 +10,11 @@ on:
         description: Release tag to create (for example v4.0.1-ezvm.11)
         required: true
         type: string
+      publish_release:
+        description: Publish after verification (manual runs default to a draft for acceptance testing)
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: aarch64-image-release
@@ -219,6 +224,7 @@ jobs:
           done < <(cd "$release_dir" && sha256sum *)
 
       - name: Publish verified Release
+        if: github.event_name == 'push' || inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}

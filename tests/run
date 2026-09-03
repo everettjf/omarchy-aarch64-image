@@ -483,6 +483,10 @@ grep -Fq -- '--notes-file RELEASE_NOTES.md' "$ROOT/.github/workflows/release-ima
   grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/README.md" ||
   fail "GitHub Releases do not expose the one-command latest installer"
 pass "native GitHub image publishing emits only the verified EZVM image path"
+grep -Fq "if: github.event_name == 'push' || inputs.publish_release" \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "manual image validation can accidentally publish a draft as latest"
+pass "manual image validation remains a draft unless publication is explicit"
 grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
 grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||
