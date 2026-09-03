@@ -14,7 +14,7 @@ NoNewPrivileges=true
 ProtectHome=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/run
+ReadWritePaths=/run /mnt/ezvm-shared
 
 [Install]
 WantedBy=multi-user.target

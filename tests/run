@@ -705,6 +705,12 @@ grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
 grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not bake the pinned EZVM guest agent"
+grep -Fq -- '-X main.version=${{ steps.sources.outputs.ezvm_agent_ref }}' \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "release workflow does not embed the pinned guest-agent revision as its runtime version"
+grep -Fq 'ReadWritePaths=/run /mnt/ezvm-shared' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
+  fail "guest agent service cannot write the EZVM shared folder"
 source "$ROOT/sources.env"
 [[ $EZVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
   fail "EZVM guest agent source is not pinned to a full commit"
