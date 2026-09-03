@@ -1234,6 +1234,7 @@ validate_target() {
     fail "target validation failed: the Omarchy AArch64 signing key is not trusted"
   target_chroot pacman -Q omarchy-aarch64-keyring omarchy omarchy-settings \
     limine limine-mkinitcpio-hook limine-snapper-sync plymouth snapper \
+    power-profiles-daemon \
     gst-plugin-pipewire pipewire pipewire-alsa \
     pipewire-audio pipewire-jack pipewire-pulse wireplumber >/dev/null
   while IFS= read -r package; do

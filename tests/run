@@ -245,6 +245,11 @@ fi
       fail "supported AArch64 desktop package remains excluded: $package"
     fi
   done
+  grep -qx 'power-profiles-daemon' "$OMARCHY_TEST_SOURCE/install/omarchy-base.packages" ||
+    fail "the pinned Omarchy source no longer declares power-profiles-daemon"
+  if grep -qx 'power-profiles-daemon' "$PROFILE_DIR/excluded-packages"; then
+    fail "aarch64-virt excludes the service required by Omarchy setup"
+  fi
   for package in gst-plugin-pipewire pipewire pipewire-alsa pipewire-audio pipewire-jack \
     pipewire-pulse wireplumber; do
     grep -qx "$package" "$PROFILE_DIR/runtime-packages" ||
