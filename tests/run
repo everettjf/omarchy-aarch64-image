@@ -670,7 +670,9 @@ EOF
   printf '#!/bin/bash\nexit 0\n' >"$fixture/bin/systemctl"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/bin/hyprctl"
   chmod 755 "$fixture/bin/systemctl" "$fixture/bin/hyprctl"
-  HOME="$fixture/home" PATH="$fixture/bin:$PATH" "$display_setup"
+  HOME="$fixture/home" PATH="$fixture/bin:$PATH" \
+    OMARCHY_EZVM_SPICE_DEFAULT_CONFIG="$spice_config" \
+    "$display_setup"
   ! grep -Fq 'spice-guest-tools managed mode' "$fixture/home/.config/hypr/monitors.lua" ||
     fail "EZVM display migration left SPICE monitor ownership behind"
   grep -Fq 'mode = "preferred"' "$fixture/home/.config/hypr/monitors.lua" ||

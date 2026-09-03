@@ -11,6 +11,7 @@ readonly CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 readonly STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 readonly MONITORS_FILE="$CONFIG_HOME/hypr/monitors.lua"
 readonly SPICE_CONFIG="$CONFIG_HOME/spice-guest-tools/config.toml"
+readonly SPICE_DEFAULT_CONFIG="${OMARCHY_EZVM_SPICE_DEFAULT_CONFIG:-/usr/share/spice-guest-tools/config/config.toml}"
 
 remove_spice_monitor_ownership() {
   [[ -f $MONITORS_FILE ]] || return 0
@@ -32,7 +33,7 @@ remove_spice_monitor_ownership() {
 disable_spice_display_bridge() {
   if [[ ! -f $SPICE_CONFIG ]]; then
     install -d -m 0700 "$(dirname "$SPICE_CONFIG")"
-    install -m 0600 /usr/share/spice-guest-tools/config/config.toml "$SPICE_CONFIG"
+    install -m 0600 "$SPICE_DEFAULT_CONFIG" "$SPICE_CONFIG"
   fi
   local temporary
   temporary=$(mktemp "${SPICE_CONFIG}.XXXXXX")
