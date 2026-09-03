@@ -146,7 +146,8 @@ build/omarchy-aarch64-ezvm.raw.sha256
 ```
 
 A successful build also emits package inventories and
-`build/image-provenance.txt`.
+`build/image-provenance.txt`, including the pinned EZVM Guest Agent source
+revision and the digest of the exact binary installed into the image.
 
 Package a local EZVM Release layout:
 

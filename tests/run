@@ -708,6 +708,10 @@ grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
 source "$ROOT/sources.env"
 [[ $EZVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
   fail "EZVM guest agent source is not pinned to a full commit"
+for field in ezvm_guest_agent_source_url ezvm_guest_agent_source_ref ezvm_guest_agent_sha256; do
+  grep -Fq "printf '$field=%s\\n'" "$ROOT/bin/build-image" ||
+    fail "image provenance does not record $field"
+done
 grep -Fq 'What=ezvm-agent' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-ezvm\\x2dagent\\x2dconfig.mount" ||
   fail "image does not mount the host-provided EZVM enrollment share"

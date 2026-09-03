@@ -16,7 +16,8 @@ an older raw image that happens to have the same product version.
 
 The packager also copies available build evidence into the release layout:
 
-- `image-provenance.txt` records source URLs, commits, signatures, and hashes;
+- `image-provenance.txt` records source URLs, commits, signatures, hashes, and
+  the exact EZVM Guest Agent source revision and binary digest;
 - `*.raw.sha256` identifies the exact raw disk;
 - `*.all-packages.txt` and `*.packages.tsv` inventory the installed system; and
 - `*.explicit-packages.txt` and `*.orphans.txt` record package state.

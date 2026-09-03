@@ -1112,6 +1112,10 @@ write_image_provenance() {
     printf 'rootfs_sha256=%s\n' "$(sha256sum "$ROOTFS_PATH" | awk '{print $1}')"
     printf 'node_archive=%s\n' "${NODE_TARBALL##*/}"
     printf 'node_sha256=%s\n' "$(sha256sum "$NODE_TARBALL" | awk '{print $1}')"
+    printf 'ezvm_guest_agent_source_url=%s\n' "$EZVM_GUEST_AGENT_URL"
+    printf 'ezvm_guest_agent_source_ref=%s\n' "$EZVM_GUEST_AGENT_REF"
+    printf 'ezvm_guest_agent_sha256=%s\n' \
+      "$(sha256sum "$EZVM_GUEST_AGENT_BINARY" | awk '{print $1}')"
     printf 'omarchy_source=%s\n' "$OMARCHY_SOURCE_COMMIT"
     printf 'omarchy_source_url=%s\n' "$OMARCHY_AARCH64_URL"
     printf 'omarchy_source_ref=%s\n' "$OMARCHY_AARCH64_REF"
