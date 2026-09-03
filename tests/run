@@ -738,7 +738,7 @@ grep -Fq 'install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"' "$ROOT/bin/build-image"
 grep -Fq 'target_chroot systemctl --global enable ezvm-session-agent.service' "$ROOT/bin/build-image" ||
   fail "Session Agent is not globally enabled for the owner session"
 for required in \
-  etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount \
+  'etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount' \
   mnt/ezvm-shared \
   etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service; do
   grep -Fq "$required" "$ROOT/bin/build-image" ||
