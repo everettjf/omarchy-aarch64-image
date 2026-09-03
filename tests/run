@@ -302,9 +302,9 @@ pass "AArch64 repository and exclusion manifests are disjoint"
   trap 'rm -rf "$fixture"' EXIT
   packages_json=$(
     read_list "$ROOT/config/omarchy-packages.aarch64" |
-      jq -R --arg source "$OMARCHY_AARCH64_REF" '
+      jq -R --arg version "$OMARCHY_AARCH64_PACKAGE_VERSION" '
         {name: ., version: (if . == "omarchy" then
-          "4.0.1.r1.g" + ($source[0:12]) + "-1"
+          $version
         else "1-1" end)}
       ' | jq --slurp .
   )
@@ -328,7 +328,7 @@ pass "AArch64 repository and exclusion manifests are disjoint"
     ' >"$fixture/repository-manifest.json"
   OMARCHY_SOURCE_COMMIT=$OMARCHY_AARCH64_REF
   validate_omarchy_repository_manifest "$fixture/repository-manifest.json"
-  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == 4.0.1.r1.g"${OMARCHY_AARCH64_REF:0:12}"-1 ]] ||
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == "$OMARCHY_AARCH64_PACKAGE_VERSION" ]] ||
     fail "repository/source version boundary was not captured"
 
   jq -n \
@@ -348,7 +348,7 @@ pass "AArch64 repository and exclusion manifests are disjoint"
       }
     ' >"$fixture/repository-manifest-v1.json"
   validate_omarchy_repository_manifest "$fixture/repository-manifest-v1.json"
-  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == 4.0.1.r1.g"${OMARCHY_AARCH64_REF:0:12}"-1 ]] ||
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == "$OMARCHY_AARCH64_PACKAGE_VERSION" ]] ||
     fail "schema-1 repository/source version boundary was not captured"
   pass "signed stable repository manifests are complete and match the pinned Omarchy source"
 )

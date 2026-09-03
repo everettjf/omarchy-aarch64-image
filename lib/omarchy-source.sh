@@ -2,7 +2,8 @@
 
 # Resolve the separately maintained Omarchy AArch64 source tree. Callers must
 # provide PROJECT_ROOT, BUILD_ROOT (or BUILD_DIR), OMARCHY_AARCH64_URL,
-# OMARCHY_AARCH64_REF, OMARCHY_AARCH64_VERSION, and a fail() function.
+# OMARCHY_AARCH64_REF, OMARCHY_AARCH64_VERSION,
+# OMARCHY_AARCH64_PACKAGE_VERSION, and a fail() function.
 
 OMARCHY_SOURCE_OVERRIDE="${OMARCHY_SOURCE_OVERRIDE:-}"
 OMARCHY_SOURCE_DIR=""
@@ -41,6 +42,8 @@ resolve_omarchy_source() {
     fail "OMARCHY_AARCH64_REF must be a full immutable commit"
   [[ $OMARCHY_AARCH64_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+([.][0-9]+)?$ ]] ||
     fail "invalid OMARCHY_AARCH64_VERSION: $OMARCHY_AARCH64_VERSION"
+  [[ $OMARCHY_AARCH64_PACKAGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*$ ]] ||
+    fail "invalid OMARCHY_AARCH64_PACKAGE_VERSION: $OMARCHY_AARCH64_PACKAGE_VERSION"
 
   if [[ -n $OMARCHY_SOURCE_OVERRIDE ]]; then
     source=$(realpath -e -- "$OMARCHY_SOURCE_OVERRIDE") ||

@@ -367,7 +367,7 @@ resolve_node_tarball() {
 
 validate_omarchy_repository_manifest() {
   local manifest=${1:-$OMARCHY_REPOSITORY_MANIFEST}
-  local package source_fragment
+  local package
 
   jq --exit-status \
     --arg fingerprint "$OMARCHY_AARCH64_SIGNING_FINGERPRINT" '
@@ -402,9 +402,8 @@ validate_omarchy_repository_manifest() {
 
   OMARCHY_REPOSITORY_GENERATED_AT=$(jq -r '.generated_at' "$manifest")
   OMARCHY_REPOSITORY_OMARCHY_VERSION=$(repository_package_version "$manifest" omarchy)
-  source_fragment=".g${OMARCHY_SOURCE_COMMIT:0:12}-"
-  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == *"$source_fragment"* ]] ||
-    fail "repository omarchy package $OMARCHY_REPOSITORY_OMARCHY_VERSION does not match source $OMARCHY_SOURCE_COMMIT"
+  [[ $OMARCHY_REPOSITORY_OMARCHY_VERSION == "$OMARCHY_AARCH64_PACKAGE_VERSION" ]] ||
+    fail "repository omarchy package $OMARCHY_REPOSITORY_OMARCHY_VERSION does not match pinned package $OMARCHY_AARCH64_PACKAGE_VERSION for source $OMARCHY_SOURCE_COMMIT"
 }
 
 repository_package_version() {
