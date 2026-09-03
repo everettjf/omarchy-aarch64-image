@@ -701,12 +701,43 @@ grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
 grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not bake the pinned EZVM guest agent"
+source "$ROOT/sources.env"
+[[ $EZVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
+  fail "EZVM guest agent source is not pinned to a full commit"
 grep -Fq 'What=ezvm-agent' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-ezvm\\x2dagent\\x2dconfig.mount" ||
   fail "image does not mount the host-provided EZVM enrollment share"
 grep -Fq 'Before=omarchy-provision-owner.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "EZVM guest agent is not ordered before first-user provisioning"
+shared_mount="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/mnt-ezvm-shared.mount"
+session_agent="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/ezvm-session-agent.service"
+grep -Fxq 'What=ezvm_shared' "$shared_mount" ||
+  fail "EZVM Omarchy shared mount uses the wrong VirtioFS tag"
+grep -Fxq 'Where=/mnt/ezvm-shared' "$shared_mount" ||
+  fail "EZVM Omarchy shared mount uses the wrong guest path"
+grep -Fxq 'Options=rw,nosuid,nodev' "$shared_mount" ||
+  fail "EZVM Omarchy shared mount lacks its security options"
+grep -Fxq 'ExecStart=/usr/local/sbin/ezvm-agent --session' "$session_agent" ||
+  fail "desktop integration does not run the unprivileged Session Agent mode"
+grep -Fxq 'NoNewPrivileges=true' "$session_agent" ||
+  fail "Session Agent can gain privileges"
+grep -Fxq 'ProtectSystem=strict' "$session_agent" ||
+  fail "Session Agent does not protect the guest system tree"
+grep -Eq '^[[:space:]]*wl-clipboard([[:space:]]*(#.*)?)?$' \
+  "$ROOT/profiles/aarch64-virt/runtime-packages" ||
+  fail "Session Agent clipboard dependency is not explicit"
+grep -Fq 'target_chroot systemctl enable mnt-ezvm-shared.mount' "$ROOT/bin/build-image" ||
+  fail "shared mount is not enabled in the factory image"
+grep -Fq 'target_chroot systemctl --global enable ezvm-session-agent.service' "$ROOT/bin/build-image" ||
+  fail "Session Agent is not globally enabled for the owner session"
+for required in \
+  etc/systemd/system/multi-user.target.wants/mnt-ezvm-shared.mount \
+  etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service; do
+  grep -Fq "$required" "$ROOT/bin/build-image" ||
+    fail "target validation does not require $required"
+done
+pass "EZVM Omarchy shared folder and Session Agent are hardened and enabled"
 grep -Fq 'systemctl mask systemd-oomd.service systemd-oomd.socket' \
   "$ROOT/bin/build-image" ||
   fail "VZ image does not mask the systemd-oomd SIGILL activation paths"

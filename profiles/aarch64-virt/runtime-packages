@@ -21,5 +21,6 @@ spice-vdagent
 sudo
 vulkan-swrast
 wireplumber
+wl-clipboard
 xdg-user-dirs
 zram-generator
