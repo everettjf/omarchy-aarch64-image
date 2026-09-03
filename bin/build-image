@@ -906,6 +906,7 @@ EOF
   install -m755 "$MOUNT_DIR/usr/bin/omarchy-hyprland-monitor-watch" \
     "$MOUNT_DIR/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream"
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
+  install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"
   install -m755 "$EZVM_GUEST_AGENT_BINARY" "$MOUNT_DIR/usr/local/sbin/ezvm-agent"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
@@ -917,7 +918,7 @@ EOF
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
   target_chroot systemctl enable run-ezvm\\x2dagent\\x2dconfig.mount ezvm-agent.service
-  target_chroot systemctl enable mnt-ezvm-shared.mount
+  target_chroot systemctl enable 'mnt-ezvm\x2dshared.mount'
   # This display path is independent of SPICE.  Enable dedicated user units
   # globally so an EZVM virtio-gpu session does not inherit SPICE port or
   # WAYLAND_DISPLAY conditions from optional clipboard integration services.
@@ -1168,9 +1169,10 @@ validate_target() {
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
     etc/systemd/system/multi-user.target.wants/ezvm-agent.service
-    etc/systemd/system/multi-user.target.wants/mnt-ezvm-shared.mount
+    'etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount'
     etc/systemd/system/multi-user.target.wants/run-ezvm\\x2dagent\\x2dconfig.mount
-    etc/systemd/system/mnt-ezvm-shared.mount
+    'etc/systemd/system/mnt-ezvm\x2dshared.mount'
+    mnt/ezvm-shared
     etc/systemd/user/ezvm-session-agent.service
     etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service
     etc/systemd/system/systemd-oomd.service

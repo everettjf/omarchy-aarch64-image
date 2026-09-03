@@ -714,7 +714,7 @@ grep -Fq 'What=ezvm-agent' \
 grep -Fq 'Before=omarchy-provision-owner.service' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "EZVM guest agent is not ordered before first-user provisioning"
-shared_mount="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/mnt-ezvm-shared.mount"
+shared_mount="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/mnt-ezvm\x2dshared.mount"
 session_agent="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/ezvm-session-agent.service"
 grep -Fxq 'What=ezvm_shared' "$shared_mount" ||
   fail "EZVM Omarchy shared mount uses the wrong VirtioFS tag"
@@ -731,12 +731,15 @@ grep -Fxq 'ProtectSystem=strict' "$session_agent" ||
 grep -Eq '^[[:space:]]*wl-clipboard([[:space:]]*(#.*)?)?$' \
   "$ROOT/profiles/aarch64-virt/runtime-packages" ||
   fail "Session Agent clipboard dependency is not explicit"
-grep -Fq 'target_chroot systemctl enable mnt-ezvm-shared.mount' "$ROOT/bin/build-image" ||
+grep -Fq "target_chroot systemctl enable 'mnt-ezvm\\x2dshared.mount'" "$ROOT/bin/build-image" ||
   fail "shared mount is not enabled in the factory image"
+grep -Fq 'install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"' "$ROOT/bin/build-image" ||
+  fail "shared mount point is not created in the factory image"
 grep -Fq 'target_chroot systemctl --global enable ezvm-session-agent.service' "$ROOT/bin/build-image" ||
   fail "Session Agent is not globally enabled for the owner session"
 for required in \
-  etc/systemd/system/multi-user.target.wants/mnt-ezvm-shared.mount \
+  etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount \
+  mnt/ezvm-shared \
   etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service; do
   grep -Fq "$required" "$ROOT/bin/build-image" ||
     fail "target validation does not require $required"
