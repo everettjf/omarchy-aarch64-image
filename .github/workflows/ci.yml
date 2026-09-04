@@ -1,0 +1,48 @@
+name: Image source contracts
+
+on:
+  push:
+    branches:
+      - main
+      - codex/ezvm-omarchy-integration
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-source-contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout image source
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned Omarchy source
+        id: sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./sources.env
+          echo "omarchy_ref=$OMARCHY_AARCH64_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Omarchy source
+        uses: actions/checkout@v5
+        with:
+          repository: riverscn/omarchy-aarch64
+          ref: ${{ steps.sources.outputs.omarchy_ref }}
+          path: build/dependencies/omarchy-aarch64
+          persist-credentials: false
+
+      - name: Install contract-test tools
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+
+      - name: Run image source contracts
+        env:
+          OMARCHY_TEST_SOURCE: build/dependencies/omarchy-aarch64
+        run: ./tests/run
