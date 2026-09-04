@@ -781,18 +781,30 @@ unmount_package_cache() {
 }
 
 retry_target_pacman() {
-  local attempt delay
+  local attempt attempt_log delay
+
+  attempt_log=$(mktemp)
 
   for attempt in {1..8}; do
-    if target_chroot pacman "$@"; then
+    if target_chroot pacman "$@" 2>&1 | tee "$attempt_log"; then
+      rm -f -- "$attempt_log"
       return 0
     fi
-    ((attempt < 8)) || fail "pacman failed after 8 attempts"
+    if grep -Eq 'could not satisfy dependencies|unable to satisfy dependency' "$attempt_log"; then
+      rm -f -- "$attempt_log"
+      fail "pacman repository dependency graph is inconsistent; retry after the signed and official repositories publish matching packages"
+    fi
+    if ((attempt >= 8)); then
+      rm -f -- "$attempt_log"
+      fail "pacman failed after 8 attempts"
+    fi
     delay=$((attempt * 10))
     ((delay <= 60)) || delay=60
     warn "pacman attempt $attempt failed; retrying in ${delay}s with the persistent package cache"
     sleep "$delay"
   done
+
+  rm -f -- "$attempt_log"
 }
 
 write_omarchy_repository_configuration() {

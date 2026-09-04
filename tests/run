@@ -564,6 +564,28 @@ grep -Fq "if: github.event_name == 'push' || inputs.publish_release" \
 pass "manual image validation remains a draft unless publication is explicit"
 grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
+(
+  # shellcheck source=../bin/build-image
+  source "$ROOT/bin/build-image"
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  attempts="$fixture/attempts"
+  target_chroot() {
+    printf 'attempt\n' >>"$attempts"
+    printf 'error: failed to prepare transaction (could not satisfy dependencies)\n' >&2
+    printf "unable to satisfy dependency 'libexample.so=1-64'\n" >&2
+    return 1
+  }
+  sleep() {
+    fail "deterministic dependency failure was retried"
+  }
+  if (retry_target_pacman -Syu --needed --noconfirm example); then
+    fail "deterministic dependency failure was accepted"
+  fi
+  [[ $(wc -l <"$attempts") == 1 ]] ||
+    fail "deterministic dependency failure ran more than once"
+)
+pass "deterministic package dependency failures stop without mirror retries"
 grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||
   fail "ASCII-armored Arch Linux ARM keys are not normalized for gpgv"
 grep -Fq -- '--keyring "$ROOTFS_VERIFY_KEYRING"' "$ROOT/bin/build-image" ||
