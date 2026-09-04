@@ -105,13 +105,13 @@ pass "all project and modified runtime scripts parse as Bash"
   # shellcheck source=/dev/null
   source "$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/ezvm-owner-provisioning"
 
-  jq -n '{schemaVersion: 1, username: "omarchy", password: "temporary-password",
+  jq -n '{schemaVersion: 1, username: "omarchy", password: "temporary-密碼",
     keyboard: "us", fullName: "Omarchy Owner", emailAddress: "owner@example.com",
     hostname: "omarchy", timezone: "America/Los_Angeles"}' >"$request"
   chmod 600 "$request"
   ezvm_load_owner_provisioning || fail "valid EZVM owner request was rejected"
-  [[ $username == omarchy && $password == temporary-password &&
-     $password_confirmation == temporary-password && $keyboard == us &&
+  [[ $username == omarchy && $password == temporary-密碼 &&
+     $password_confirmation == temporary-密碼 && $keyboard == us &&
      $timezone == America/Los_Angeles ]] || fail "EZVM owner fields were not loaded"
   [[ ! -e $request ]] || fail "consumed EZVM owner request retained its password on disk"
 

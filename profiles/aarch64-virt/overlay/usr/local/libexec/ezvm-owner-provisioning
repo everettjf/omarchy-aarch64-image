@@ -11,14 +11,13 @@ EZVM_OWNER_REQUEST_UID=${EZVM_OWNER_REQUEST_UID:-0}
 
 ezvm_owner_request_fields() {
   jq -j -e '
-    def no_controls: all(explode[]; . >= 32 and . != 127);
+    def no_controls: all(explode[]; . >= 32 and (. < 127 or . > 159));
     if type == "object" and
        .schemaVersion == 1 and
        ((keys - ["schemaVersion", "username", "password", "keyboard", "fullName",
                  "emailAddress", "hostname", "timezone"]) | length == 0) and
        ([.username, .password, .keyboard, (.fullName // ""), (.emailAddress // ""),
          .hostname, .timezone] | all(type == "string")) and
-       (.password | test("^[ -~]{1,128}$")) and
        ([.username, .password, .keyboard, (.fullName // ""), (.emailAddress // ""),
          .hostname, .timezone] | all(no_controls))
     then
