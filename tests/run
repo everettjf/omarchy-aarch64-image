@@ -816,6 +816,8 @@ grep -Fq 'pacman -Syu --needed --noconfirm btrfs-progs util-linux' \
 [[ -x $ROOT/bin/reconstruct-ezvm-release ]] ||
   fail "pinned base-release reconstruction tool is not executable"
 grep -Fq '[[ $actual == "$BASE_SHA256" ]]' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'ensure_loop_device_nodes' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'ensure_loop_partition_nodes' "$ROOT/bin/rebake-ezvm-integration" &&
   grep -Fq 'btrfs property set -ts "$factory" ro false' "$ROOT/bin/rebake-ezvm-integration" &&
   grep -Fq 'btrfs subvolume snapshot "$root" "$factory"' "$ROOT/bin/rebake-ezvm-integration" &&
   grep -Fq 'btrfs property set -ts "$factory" ro true' "$ROOT/bin/rebake-ezvm-integration" ||

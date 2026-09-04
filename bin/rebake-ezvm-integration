@@ -151,14 +151,53 @@ cleanup() {
   exit "$status"
 }
 
+ensure_loop_device_nodes() {
+  local sys_dev loop_name node major minor found=0
+  for sys_dev in /sys/class/block/loop*/dev; do
+    [[ -r $sys_dev ]] || continue
+    found=1
+    loop_name=${sys_dev%/dev}
+    loop_name=${loop_name##*/}
+    node="/dev/$loop_name"
+    [[ -b $node ]] && continue
+    [[ ! -e $node ]] || fail "$node exists but is not a block device"
+    IFS=: read -r major minor <"$sys_dev"
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || fail "invalid device number for $loop_name"
+    mknod -m 0660 "$node" b "$major" "$minor"
+  done
+  ((found == 1)) || fail "the kernel exposes no loop devices"
+}
+
+ensure_loop_partition_nodes() {
+  local loop_name=${LOOP_DEVICE##*/}
+  local partition node sys_dev major minor attempt
+  for partition in 1 2; do
+    node="${LOOP_DEVICE}p${partition}"
+    [[ -b $node ]] && continue
+    sys_dev="/sys/class/block/${loop_name}p${partition}/dev"
+    attempt=0
+    while ((attempt < 50)); do
+      [[ -r $sys_dev ]] && break
+      sleep 0.1
+      ((attempt += 1))
+    done
+    [[ -r $sys_dev ]] || fail "kernel did not expose partition $partition for $LOOP_DEVICE"
+    IFS=: read -r major minor <"$sys_dev"
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || fail "invalid device number for ${loop_name}p${partition}"
+    mknod -m 0660 "$node" b "$major" "$minor"
+  done
+}
+
 rebake_image() {
   local root factory digest checksum_staged
   STAGED_IMAGE="$OUTPUT_IMAGE.part"
   [[ ! -e $STAGED_IMAGE && ! -L $STAGED_IMAGE ]] || fail "staged output already exists: $STAGED_IMAGE"
   cp --reflink=auto --sparse=always "$BASE_IMAGE" "$STAGED_IMAGE"
 
+  ensure_loop_device_nodes
   LOOP_DEVICE=$(losetup --find --show --partscan "$STAGED_IMAGE")
   udevadm settle
+  ensure_loop_partition_nodes
   [[ -b ${LOOP_DEVICE}p2 ]] || fail "base image has no Btrfs root partition"
   TOP_LEVEL=$(mktemp -d /tmp/omarchy-ezvm-rebake.XXXXXX)
   mount -o subvolid=5 "${LOOP_DEVICE}p2" "$TOP_LEVEL"
@@ -206,7 +245,7 @@ rebake_image() {
 main() {
   local command
   parse_args "$@"
-  for command in awk btrfs cmp cp date file findmnt fstrim grep install losetup mktemp mount mv realpath sha256sum sync udevadm umount; do
+  for command in awk btrfs cmp cp date file findmnt fstrim grep install losetup mknod mktemp mount mv realpath sha256sum sleep sync udevadm umount; do
     require_command "$command"
   done
   validate_inputs
