@@ -20,6 +20,13 @@ absolute_path() {
   printf '%s/%s\n' "$directory" "$basename"
 }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
+file_size() {
+  local path=$1
+  if stat -c %s "$path" 2>/dev/null; then
+    return
+  fi
+  stat -f %z "$path"
+}
 
 cleanup() {
   local status=$?
@@ -75,7 +82,7 @@ parts=()
 while IFS=$'\t' read -r name expected_size expected_sha; do
   path="$ASSET_DIR/$name"
   [[ -f $path && ! -L $path ]] || fail "release part is missing or unsafe: $name"
-  [[ $(stat -c %s "$path") == "$expected_size" ]] || fail "release part size mismatch: $name"
+  [[ $(file_size "$path") == "$expected_size" ]] || fail "release part size mismatch: $name"
   [[ $(sha256sum "$path" | awk '{print $1}') == "$expected_sha" ]] || fail "release part checksum mismatch: $name"
   parts+=("$path")
 done < <(jq -r '.archive.parts[] | [.name, (.size | tostring), .sha256] | @tsv' "$manifest")
@@ -86,7 +93,7 @@ archive_sha=$(cat -- "${parts[@]}" | sha256sum | awk '{print $1}')
 STAGED="$OUTPUT_IMAGE.part"
 [[ ! -e $STAGED && ! -L $STAGED ]] || fail "staged output already exists: $STAGED"
 cat -- "${parts[@]}" | gzip -dc | perl "$PROJECT_ROOT/bin/decode-ezvm-sparse" "$STAGED"
-[[ $(stat -c %s "$STAGED") == "$(jq -r '.disk.virtualSize' "$manifest")" ]] || fail "reconstructed image size mismatch"
+[[ $(file_size "$STAGED") == "$(jq -r '.disk.virtualSize' "$manifest")" ]] || fail "reconstructed image size mismatch"
 [[ $(sha256sum "$STAGED" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || fail "reconstructed image checksum mismatch"
 
 output_stem=${OUTPUT_IMAGE%.raw}
