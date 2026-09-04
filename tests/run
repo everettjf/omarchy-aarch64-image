@@ -79,8 +79,10 @@ pass "all project and modified runtime scripts parse as Bash"
   bash -n "$owner"
   grep -Fq 'source /usr/local/libexec/ezvm-owner-provisioning' "$owner" ||
     fail "staged first-boot owner does not load the EZVM provisioning consumer"
-  grep -Fq 'ezvm_wait_owner_provisioning && automated=1' "$owner" ||
-    fail "staged first-boot owner does not prefer authenticated EZVM setup"
+  grep -Fq 'ezvm_wait_owner_provisioning && EZVM_OWNER_AUTOMATED=1' "$owner" ||
+    fail "staged first-boot owner does not check authenticated EZVM setup before the greeter"
+  grep -Fq 'local status=0 automated=${EZVM_OWNER_AUTOMATED:-0}' "$owner" ||
+    fail "staged first-boot owner does not carry authenticated setup into run_setup"
   pass "first-boot form is bus-independent, resize-safe, and EZVM-aware"
 )
 

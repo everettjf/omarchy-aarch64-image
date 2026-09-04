@@ -1018,7 +1018,7 @@ stage_first_boot_provisioning() {
   # Prefer credentials delivered by EZVM's authenticated Guest Agent. Keep the
   # original tty form as a bounded fallback for older hosts. Patch the pinned
   # upstream runtime at build time and fail closed if its function shape drifts.
-  local setup_source_occurrences run_setup_occurrences
+  local setup_source_occurrences run_setup_occurrences main_occurrences
   # shellcheck disable=SC2016 # Match the literal variable reference in the staged script.
   setup_source_occurrences=$(grep -Fc 'source "$OMARCHY_PATH/install/provisioning/setup-form.sh"' "$owner")
   ((setup_source_occurrences == 1)) ||
@@ -1029,7 +1029,18 @@ stage_first_boot_provisioning() {
   run_setup_occurrences=$(perl -0ne '$count = () = /run_setup\(\) \{\n  local status\n\n  while true; do/g; print $count' "$owner")
   ((run_setup_occurrences == 1)) ||
     fail "expected one interactive run_setup entry, found $run_setup_occurrences"
-  perl -0pi.bak -e 's~run_setup\(\) \{\n  local status\n\n  while true; do~run_setup() {\n  local status=0 automated=0\n\n  ezvm_wait_owner_provisioning \&\& automated=1 || status=\$?\n  (( status <= 1 )) || return "\$status"\n\n  while (( ! automated )); do~' "$owner"
+  perl -0pi.bak -e 's~run_setup\(\) \{\n  local status\n\n  while true; do~run_setup() {\n  local status=0 automated=\${EZVM_OWNER_AUTOMATED:-0}\n\n  while (( ! automated )); do~' "$owner"
+  rm -f -- "$owner.bak"
+
+  # The upstream entry point blocks on a tty greeter before run_setup. Give the
+  # authenticated Host a bounded opportunity first; if it has already staged
+  # an owner request, bypass the greeter and enter the same provisioning worker
+  # with the validated fields loaded in this shell. Older hosts still see the
+  # untouched interactive flow after the bounded wait.
+  main_occurrences=$(grep -Fc 'main() {' "$owner")
+  ((main_occurrences == 1)) ||
+    fail "expected one first-boot main entry, found $main_occurrences"
+  perl -0pi.bak -e 's~main\(\) \{\n~main() {\n  local ezvm_status=0\n  ezvm_wait_owner_provisioning \&\& EZVM_OWNER_AUTOMATED=1 || ezvm_status=\$?\n  (( ezvm_status <= 1 )) || return "\$ezvm_status"\n  if (( \${EZVM_OWNER_AUTOMATED:-0} )); then\n    run_setup\n    return\n  fi\n\n~' "$owner"
   rm -f -- "$owner.bak"
 
   install -d -m755 "$provisioning/packages" "$wants"
