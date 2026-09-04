@@ -970,6 +970,7 @@ stage_first_boot_provisioning() {
   local owner="$MOUNT_DIR/usr/bin/omarchy-provision-owner"
   local unit_source="$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   local setup_form="$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
+  local ezvm_provisioning="$MOUNT_DIR/usr/local/libexec/ezvm-owner-provisioning"
   local unit_target="$MOUNT_DIR/etc/systemd/system/omarchy-provision-owner.service"
   local wants="$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
@@ -977,6 +978,7 @@ stage_first_boot_provisioning() {
     fail "the fork package does not contain omarchy-provision-owner"
   [[ -f $unit_source ]] || fail "the fork package does not contain the provisioning unit"
   [[ -f $setup_form ]] || fail "the fork package does not contain the provisioning form"
+  [[ -x $ezvm_provisioning ]] || fail "the EZVM owner provisioning consumer is missing"
 
   # `timedatectl list-timezones` opens the system bus in current systemd
   # releases. First-boot provisioning can reach this prompt before that bus is
@@ -1011,6 +1013,23 @@ stage_first_boot_provisioning() {
   ((ttfx_occurrences == 1)) ||
     fail "expected one first-boot ttfx greeter invocation, found $ttfx_occurrences"
   perl -0pi.bak -e 's{^(\s*)ttfx -i "\$LOGO_PATH"}{$1return 0 # EZVM: keep the first-boot greeter static and resize-safe.\n$1ttfx -i "\$LOGO_PATH"}m' "$owner"
+  rm -f -- "$owner.bak"
+
+  # Prefer credentials delivered by EZVM's authenticated Guest Agent. Keep the
+  # original tty form as a bounded fallback for older hosts. Patch the pinned
+  # upstream runtime at build time and fail closed if its function shape drifts.
+  local setup_source_occurrences run_setup_occurrences
+  # shellcheck disable=SC2016 # Match the literal variable reference in the staged script.
+  setup_source_occurrences=$(grep -Fc 'source "$OMARCHY_PATH/install/provisioning/setup-form.sh"' "$owner")
+  ((setup_source_occurrences == 1)) ||
+    fail "expected one provisioning form source, found $setup_source_occurrences"
+  perl -0pi.bak -e 's{source "\$OMARCHY_PATH/install/provisioning/setup-form.sh"}{source "\$OMARCHY_PATH/install/provisioning/setup-form.sh"\nsource /usr/local/libexec/ezvm-owner-provisioning}' "$owner"
+  rm -f -- "$owner.bak"
+
+  run_setup_occurrences=$(perl -0ne '$count = () = /run_setup\(\) \{\n  local status\n\n  while true; do/g; print $count' "$owner")
+  ((run_setup_occurrences == 1)) ||
+    fail "expected one interactive run_setup entry, found $run_setup_occurrences"
+  perl -0pi.bak -e 's~run_setup\(\) \{\n  local status\n\n  while true; do~run_setup() {\n  local status=0 automated=0\n\n  ezvm_wait_owner_provisioning \&\& automated=1 || status=\$?\n  (( status <= 1 )) || return "\$status"\n\n  while (( ! automated )); do~' "$owner"
   rm -f -- "$owner.bak"
 
   install -d -m755 "$provisioning/packages" "$wants"

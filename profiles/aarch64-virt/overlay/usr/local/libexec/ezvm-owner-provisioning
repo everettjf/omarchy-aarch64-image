@@ -1,0 +1,100 @@
+#!/bin/bash
+
+# Loaded by the staged Omarchy first-boot owner service. The root Guest Agent
+# writes this request only after an authenticated, replay-protected host call.
+# Keep validation here too: the consumer owns the final privilege boundary.
+
+EZVM_OWNER_REQUEST=${EZVM_OWNER_REQUEST:-/run/ezvm-owner-provisioning.json}
+EZVM_OWNER_ZONEINFO=${EZVM_OWNER_ZONEINFO:-/usr/share/zoneinfo}
+EZVM_OWNER_WAIT_TICKS=${EZVM_OWNER_WAIT_TICKS:-120}
+EZVM_OWNER_REQUEST_UID=${EZVM_OWNER_REQUEST_UID:-0}
+
+ezvm_owner_request_fields() {
+  jq -j -e '
+    def no_controls: all(explode[]; . >= 32 and . != 127);
+    if type == "object" and
+       .schemaVersion == 1 and
+       ((keys - ["schemaVersion", "username", "password", "keyboard", "fullName",
+                 "emailAddress", "hostname", "timezone"]) | length == 0) and
+       ([.username, .password, .keyboard, (.fullName // ""), (.emailAddress // ""),
+         .hostname, .timezone] | all(type == "string")) and
+       (.password | test("^[ -~]{1,128}$")) and
+       ([.username, .password, .keyboard, (.fullName // ""), (.emailAddress // ""),
+         .hostname, .timezone] | all(no_controls))
+    then
+      .username, "\u0000", .password, "\u0000", .keyboard, "\u0000",
+      (.fullName // ""), "\u0000", (.emailAddress // ""), "\u0000",
+      .hostname, "\u0000", .timezone, "\u0000"
+    else error("invalid EZVM owner provisioning request") end
+  ' "$EZVM_OWNER_REQUEST"
+}
+
+ezvm_load_owner_provisioning() {
+  [[ -f $EZVM_OWNER_REQUEST && ! -L $EZVM_OWNER_REQUEST ]] || return 1
+  local request_owner_mode
+  request_owner_mode=$(stat -c '%u:%a' "$EZVM_OWNER_REQUEST" 2>/dev/null ||
+    stat -f '%u:%Lp' "$EZVM_OWNER_REQUEST" 2>/dev/null) || return 2
+  [[ $request_owner_mode == "$EZVM_OWNER_REQUEST_UID:600" ]] || return 2
+
+  local -a fields=()
+  local field
+  while IFS= read -r -d '' field; do
+    fields+=("$field")
+  done < <(ezvm_owner_request_fields 2>/dev/null)
+  ((${#fields[@]} == 7)) || return 2
+
+  local candidate_username=${fields[0]}
+  local candidate_password=${fields[1]}
+  local candidate_keyboard=${fields[2]}
+  local candidate_full_name=${fields[3]}
+  local candidate_email_address=${fields[4]}
+  local candidate_hostname=${fields[5]}
+  local candidate_timezone=${fields[6]}
+
+  [[ $candidate_username =~ $OMARCHY_USERNAME_PATTERN ]] || return 2
+  [[ ! $candidate_username =~ $OMARCHY_RESERVED_USERNAMES ]] || return 2
+  ! omarchy_username_taken "$candidate_username" || return 2
+  [[ -n $candidate_password && ${#candidate_password} -le 128 ]] || return 2
+  awk -F'|' -v layout="$candidate_keyboard" '$2 == layout { found=1 } END { exit !found }' \
+    <<<"$OMARCHY_KEYBOARD_LAYOUTS" || return 2
+  [[ ${#candidate_full_name} -le 128 && ${#candidate_email_address} -le 254 ]] || return 2
+  [[ $candidate_hostname =~ $OMARCHY_HOSTNAME_PATTERN ]] || return 2
+
+  local zone_root resolved_zone
+  zone_root=$(realpath "$EZVM_OWNER_ZONEINFO") || return 2
+  resolved_zone=$(realpath "$EZVM_OWNER_ZONEINFO/$candidate_timezone") || return 2
+  [[ -f $resolved_zone && $resolved_zone == "$zone_root/"* ]] || return 2
+
+  # shellcheck disable=SC2034 # These variables are consumed by the sourcing Omarchy owner script.
+  username=$candidate_username
+  # shellcheck disable=SC2034
+  password=$candidate_password
+  # shellcheck disable=SC2034
+  password_confirmation=$candidate_password
+  # shellcheck disable=SC2034
+  keyboard=$candidate_keyboard
+  # shellcheck disable=SC2034
+  keyboard_label=$candidate_keyboard
+  # shellcheck disable=SC2034
+  full_name=$candidate_full_name
+  # shellcheck disable=SC2034
+  email_address=$candidate_email_address
+  # shellcheck disable=SC2034
+  hostname=$candidate_hostname
+  # shellcheck disable=SC2034
+  timezone=$candidate_timezone
+
+  rm -f -- "$EZVM_OWNER_REQUEST"
+  return 0
+}
+
+ezvm_wait_owner_provisioning() {
+  local tick status
+  for ((tick = 0; tick < EZVM_OWNER_WAIT_TICKS; tick++)); do
+    ezvm_load_owner_provisioning && return 0
+    status=$?
+    ((status == 1)) || return "$status"
+    sleep 0.25
+  done
+  return 1
+}

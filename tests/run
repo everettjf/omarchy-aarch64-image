@@ -53,6 +53,7 @@ pass "all project and modified runtime scripts parse as Bash"
   NODE_TARBALL="$fixture/node.tar.gz"
   mkdir -p \
     "$MOUNT_DIR/usr/bin" \
+    "$MOUNT_DIR/usr/local/libexec" \
     "$MOUNT_DIR/usr/share/omarchy/install/provisioning"
   touch "$NODE_TARBALL"
   cp "$OMARCHY_TEST_SOURCE/bin/omarchy-provision-owner" \
@@ -61,6 +62,8 @@ pass "all project and modified runtime scripts parse as Bash"
   touch "$MOUNT_DIR/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   cp "$OMARCHY_TEST_SOURCE/install/provisioning/setup-form.sh" \
     "$MOUNT_DIR/usr/share/omarchy/install/provisioning/setup-form.sh"
+  cp "$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/ezvm-owner-provisioning" \
+    "$MOUNT_DIR/usr/local/libexec/ezvm-owner-provisioning"
 
   stage_first_boot_provisioning
 
@@ -74,7 +77,70 @@ pass "all project and modified runtime scripts parse as Bash"
   [[ $(grep -Fc 'EZVM: keep the first-boot greeter static and resize-safe' "$owner") == 1 ]] ||
     fail "staged first-boot greeter still runs its resize-unsafe animation"
   bash -n "$owner"
-  pass "first-boot form is bus-independent and its greeter is resize-safe"
+  grep -Fq 'source /usr/local/libexec/ezvm-owner-provisioning' "$owner" ||
+    fail "staged first-boot owner does not load the EZVM provisioning consumer"
+  grep -Fq 'ezvm_wait_owner_provisioning && automated=1' "$owner" ||
+    fail "staged first-boot owner does not prefer authenticated EZVM setup"
+  pass "first-boot form is bus-independent, resize-safe, and EZVM-aware"
+)
+
+(
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  request="$fixture/request.json"
+  zoneinfo="$fixture/zoneinfo"
+  mkdir -p "$zoneinfo/America"
+  printf zone >"$zoneinfo/America/Los_Angeles"
+  chmod 600 "$request" 2>/dev/null || true
+
+  OMARCHY_USERNAME_PATTERN='^[a-z_][a-z0-9_-]*[$]?$'
+  OMARCHY_RESERVED_USERNAMES='^(root|sddm)$'
+  OMARCHY_HOSTNAME_PATTERN='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+  OMARCHY_KEYBOARD_LAYOUTS=$'English (US)|us\nFrench|fr'
+  omarchy_username_taken() { return 1; }
+  EZVM_OWNER_REQUEST="$request"
+  EZVM_OWNER_ZONEINFO="$zoneinfo"
+  EZVM_OWNER_WAIT_TICKS=1
+  EZVM_OWNER_REQUEST_UID=$(id -u)
+  # shellcheck source=/dev/null
+  source "$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/ezvm-owner-provisioning"
+
+  jq -n '{schemaVersion: 1, username: "omarchy", password: "temporary-password",
+    keyboard: "us", fullName: "Omarchy Owner", emailAddress: "owner@example.com",
+    hostname: "omarchy", timezone: "America/Los_Angeles"}' >"$request"
+  chmod 600 "$request"
+  ezvm_load_owner_provisioning || fail "valid EZVM owner request was rejected"
+  [[ $username == omarchy && $password == temporary-password &&
+     $password_confirmation == temporary-password && $keyboard == us &&
+     $timezone == America/Los_Angeles ]] || fail "EZVM owner fields were not loaded"
+  [[ ! -e $request ]] || fail "consumed EZVM owner request retained its password on disk"
+
+  jq -n '{schemaVersion: 1, username: "root", password: "temporary-password",
+    keyboard: "us", hostname: "omarchy", timezone: "America/Los_Angeles"}' >"$request"
+  chmod 600 "$request"
+  if ezvm_load_owner_provisioning; then
+    fail "reserved EZVM owner username was accepted"
+  fi
+  [[ -f $request ]] || fail "rejected EZVM owner request was unexpectedly deleted"
+
+  jq '. + {command: "reboot"}' "$request" >"$request.unknown"
+  mv "$request.unknown" "$request"
+  chmod 600 "$request"
+  if ezvm_load_owner_provisioning; then
+    fail "EZVM owner request with an unknown field was accepted"
+  fi
+
+  chmod 644 "$request"
+  if ezvm_load_owner_provisioning; then
+    fail "world-readable EZVM owner request was accepted"
+  fi
+
+  rm -f "$request"
+  ln -s "$zoneinfo/America/Los_Angeles" "$request"
+  if ezvm_load_owner_provisioning; then
+    fail "symlinked EZVM owner request was accepted"
+  fi
+  pass "EZVM owner provisioning consumer validates, consumes, and rejects safely"
 )
 
 
@@ -156,7 +222,9 @@ if command -v shellcheck >/dev/null 2>&1; then
   while IFS= read -r script; do
     [[ $(head -1 "$script") == *bash* ]] && bash_scripts+=("$script")
   done < <(find "$ROOT/bin" -type f -print)
-  shellcheck "${bash_scripts[@]}" "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root
+  shellcheck "${bash_scripts[@]}" \
+    "$ROOT"/profiles/aarch64-virt/overlay/usr/lib/omarchy-aarch64/grow-root \
+    "$ROOT"/profiles/aarch64-virt/overlay/usr/local/libexec/ezvm-owner-provisioning
   pass "project scripts pass shellcheck"
 fi
 
