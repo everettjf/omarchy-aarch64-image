@@ -18,7 +18,7 @@ container_path() {
 args=()
 while (($#)); do
   case $1 in
-    --base-image | --output | --ezvm-guest-agent)
+    --base-image | --output | --ezvm-guest-agent | --ezvm-session-agent-unit)
       (($# >= 2)) || fail "$1 requires a path"
       args+=("$1" "$(container_path "$2")")
       shift 2

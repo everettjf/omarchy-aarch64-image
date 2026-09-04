@@ -6,6 +6,7 @@ BASE_IMAGE=""
 BASE_SHA256=""
 OUTPUT_IMAGE=""
 AGENT_BINARY=""
+SESSION_AGENT_UNIT=""
 AGENT_SOURCE_URL=""
 AGENT_SOURCE_REF=""
 EXPECTED_OMARCHY_REF=""
@@ -30,6 +31,7 @@ Required options:
   --base-sha256 DIGEST    Expected SHA-256 of the complete base image
   --output PATH           New sparse raw image (must differ from the base)
   --ezvm-guest-agent PATH Statically linked Linux ARM64 Guest Agent
+  --ezvm-session-agent-unit PATH  Matching systemd user unit from the pinned EZVM source
   --agent-source-url URL  Source repository recorded in image provenance
   --agent-source-ref SHA  Full source commit embedded in the Agent
   --expected-omarchy-ref SHA  Required unchanged Omarchy source commit
@@ -52,6 +54,7 @@ parse_args() {
       --base-sha256) (($# >= 2)) || fail "--base-sha256 requires a digest"; BASE_SHA256=$2; shift 2 ;;
       --output) (($# >= 2)) || fail "--output requires a path"; OUTPUT_IMAGE=$(absolute_path "$2"); shift 2 ;;
       --ezvm-guest-agent) (($# >= 2)) || fail "--ezvm-guest-agent requires a path"; AGENT_BINARY=$(absolute_path "$2"); shift 2 ;;
+      --ezvm-session-agent-unit) (($# >= 2)) || fail "--ezvm-session-agent-unit requires a path"; SESSION_AGENT_UNIT=$(absolute_path "$2"); shift 2 ;;
       --agent-source-url) (($# >= 2)) || fail "--agent-source-url requires a URL"; AGENT_SOURCE_URL=$2; shift 2 ;;
       --agent-source-ref) (($# >= 2)) || fail "--agent-source-ref requires a commit"; AGENT_SOURCE_REF=$2; shift 2 ;;
       --expected-omarchy-ref) (($# >= 2)) || fail "--expected-omarchy-ref requires a commit"; EXPECTED_OMARCHY_REF=$2; shift 2 ;;
@@ -68,6 +71,9 @@ validate_inputs() {
   [[ $(id -u) == 0 ]] || fail "rebaking requires root"
   [[ -f $BASE_IMAGE && ! -L $BASE_IMAGE ]] || fail "base image is missing or unsafe: $BASE_IMAGE"
   [[ -f $AGENT_BINARY && ! -L $AGENT_BINARY ]] || fail "Guest Agent is missing or unsafe: $AGENT_BINARY"
+  [[ -f $SESSION_AGENT_UNIT && ! -L $SESSION_AGENT_UNIT ]] || fail "Session Agent unit is missing or unsafe: $SESSION_AGENT_UNIT"
+  grep -Fxq 'ReadWritePaths=/run/ezvm-agent/sessions /mnt/ezvm-shared' "$SESSION_AGENT_UNIT" ||
+    fail "Session Agent unit does not permit the authenticated clipboard staging root"
   [[ $BASE_SHA256 =~ ^[0-9a-f]{64}$ ]] || fail "base SHA-256 must contain 64 lowercase hex characters"
   [[ $AGENT_SOURCE_REF =~ ^[0-9a-f]{40}$ ]] || fail "Agent source ref must be a full commit"
   [[ $EXPECTED_OMARCHY_REF =~ ^[0-9a-f]{40}$ ]] || fail "expected Omarchy ref must be a full commit"
@@ -120,6 +126,7 @@ rewrite_provenance() {
     !/^ezvm_guest_agent_source_url=/ &&
     !/^ezvm_guest_agent_source_ref=/ &&
     !/^ezvm_guest_agent_sha256=/ &&
+    !/^ezvm_session_agent_unit_sha256=/ &&
     !/^ezvm_integration_rebaked_at=/ &&
     !/^ezvm_integration_base_raw_sha256=/
   ' "$provenance" >"$staged"
@@ -127,6 +134,7 @@ rewrite_provenance() {
     printf 'ezvm_guest_agent_source_url=%s\n' "$AGENT_SOURCE_URL"
     printf 'ezvm_guest_agent_source_ref=%s\n' "$AGENT_SOURCE_REF"
     printf 'ezvm_guest_agent_sha256=%s\n' "$(sha256sum "$AGENT_BINARY" | awk '{print $1}')"
+    printf 'ezvm_session_agent_unit_sha256=%s\n' "$(sha256sum "$SESSION_AGENT_UNIT" | awk '{print $1}')"
     printf 'ezvm_integration_rebaked_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'ezvm_integration_base_raw_sha256=%s\n' "$BASE_SHA256"
   } >>"$staged"
@@ -211,14 +219,21 @@ rebake_image() {
 
   install -m755 "$AGENT_BINARY" "$root/usr/local/sbin/ezvm-agent.rebake"
   mv -f -- "$root/usr/local/sbin/ezvm-agent.rebake" "$root/usr/local/sbin/ezvm-agent"
+  install -m644 "$SESSION_AGENT_UNIT" "$root/etc/systemd/user/ezvm-session-agent.service.rebake"
+  mv -f -- "$root/etc/systemd/user/ezvm-session-agent.service.rebake" \
+    "$root/etc/systemd/user/ezvm-session-agent.service"
   rewrite_provenance "$root"
   cmp -s "$AGENT_BINARY" "$root/usr/local/sbin/ezvm-agent" || fail "installed Guest Agent differs from the pinned binary"
+  cmp -s "$SESSION_AGENT_UNIT" "$root/etc/systemd/user/ezvm-session-agent.service" ||
+    fail "installed Session Agent unit differs from the pinned source"
 
   btrfs property set -ts "$factory" ro false
   btrfs subvolume delete "$factory"
   btrfs subvolume snapshot "$root" "$factory"
   btrfs property set -ts "$factory" ro true
   cmp -s "$AGENT_BINARY" "$factory/usr/local/sbin/ezvm-agent" || fail "factory snapshot contains the wrong Guest Agent"
+  cmp -s "$SESSION_AGENT_UNIT" "$factory/etc/systemd/user/ezvm-session-agent.service" ||
+    fail "factory snapshot contains the wrong Session Agent unit"
   grep -qxF "ezvm_guest_agent_source_ref=$AGENT_SOURCE_REF" "$factory/usr/share/omarchy-aarch64/image-build.txt" ||
     fail "factory snapshot contains the wrong Agent provenance"
 

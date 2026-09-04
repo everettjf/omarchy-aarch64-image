@@ -813,6 +813,9 @@ grep -Fq -- '--ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy' \
 grep -Fq 'pacman -Syu --needed --noconfirm btrfs-progs util-linux' \
   "$ROOT/bin/rebake-ezvm-integration-container" ||
   fail "integration rebake container does not provision its filesystem tools"
+grep -Fq -- '--ezvm-session-agent-unit build/dependencies/ezvm/GuestAgent/linux/ezvm-session-agent.service' \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "integration rebake does not install the pinned Session Agent unit"
 [[ -x $ROOT/bin/reconstruct-ezvm-release ]] ||
   fail "pinned base-release reconstruction tool is not executable"
 grep -Fq '[[ $actual == "$BASE_SHA256" ]]' "$ROOT/bin/rebake-ezvm-integration" &&
@@ -820,7 +823,8 @@ grep -Fq '[[ $actual == "$BASE_SHA256" ]]' "$ROOT/bin/rebake-ezvm-integration" &
   grep -Fq 'ensure_loop_partition_nodes' "$ROOT/bin/rebake-ezvm-integration" &&
   grep -Fq 'btrfs property set -ts "$factory" ro false' "$ROOT/bin/rebake-ezvm-integration" &&
   grep -Fq 'btrfs subvolume snapshot "$root" "$factory"' "$ROOT/bin/rebake-ezvm-integration" &&
-  grep -Fq 'btrfs property set -ts "$factory" ro true' "$ROOT/bin/rebake-ezvm-integration" ||
+  grep -Fq 'btrfs property set -ts "$factory" ro true' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'factory/etc/systemd/user/ezvm-session-agent.service' "$ROOT/bin/rebake-ezvm-integration" ||
   fail "integration rebake does not verify its base and atomically refresh the factory snapshot"
 if sed -n '/^cleanup()/,/^}/p' "$ROOT/bin/rebake-ezvm-integration" | grep -Fq 'rm -rf'; then
   fail "integration rebake cleanup recursively deletes a mount tree"
@@ -833,6 +837,7 @@ fi
   root="$fixture/root"
   OUTPUT_IMAGE="$fixture/output.raw"
   AGENT_BINARY="$fixture/agent"
+  SESSION_AGENT_UNIT="$fixture/ezvm-session-agent.service"
   AGENT_SOURCE_URL=https://github.com/everettjf/ezvm.git
   AGENT_SOURCE_REF=0123456789abcdef0123456789abcdef01234567
   EXPECTED_OMARCHY_REF=1111111111111111111111111111111111111111
@@ -840,6 +845,7 @@ fi
   BASE_SHA256=abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd
   mkdir -p "$root/usr/share/omarchy-aarch64"
   printf 'new agent\n' >"$AGENT_BINARY"
+  printf '[Service]\nReadWritePaths=/run/ezvm-agent/sessions /mnt/ezvm-shared\n' >"$SESSION_AGENT_UNIT"
   cat >"$root/usr/share/omarchy-aarch64/image-build.txt" <<'EOF'
 built_at=2026-09-04T00:00:00Z
 rootfs_sha256=preserved
@@ -858,6 +864,7 @@ EOF
   grep -qxF 'rootfs_sha256=preserved' "$provenance"
   [[ $(grep -c '^ezvm_guest_agent_source_ref=' "$provenance") == 1 ]]
   grep -qxF "ezvm_guest_agent_source_ref=$AGENT_SOURCE_REF" "$provenance"
+  grep -qxF "ezvm_session_agent_unit_sha256=$(sha256sum "$SESSION_AGENT_UNIT" | awk '{print $1}')" "$provenance"
   grep -qxF "ezvm_integration_base_raw_sha256=$BASE_SHA256" "$provenance"
   cmp -s "$provenance" "$fixture/image-provenance.txt"
 )
@@ -972,7 +979,7 @@ grep -Fxq 'NoNewPrivileges=true' "$session_agent" ||
   fail "Session Agent can gain privileges"
 grep -Fxq 'ProtectSystem=strict' "$session_agent" ||
   fail "Session Agent does not protect the guest system tree"
-grep -Fxq 'ReadWritePaths=/run/ezvm-agent/sessions' "$session_agent" ||
+grep -Fxq 'ReadWritePaths=/run/ezvm-agent/sessions /mnt/ezvm-shared' "$session_agent" ||
   fail "Session Agent cannot write its narrowly scoped runtime socket"
 grep -Eq '^[[:space:]]*wl-clipboard([[:space:]]*(#.*)?)?$' \
   "$ROOT/profiles/aarch64-virt/runtime-packages" ||

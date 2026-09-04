@@ -253,6 +253,7 @@ jobs:
               sources.env | bin/build-image | bin/reconstruct-ezvm-release | \
                 bin/rebake-ezvm-integration | bin/rebake-ezvm-integration-container | \
                 .github/workflows/release-image.yml | README.md | RELEASE_NOTES.md | \
+                profiles/aarch64-virt/overlay/etc/systemd/user/ezvm-session-agent.service | \
                 docs/* | tests/*) ;;
               *)
                 echo "Integration-only rebake rejected Guest-affecting change: $path" >&2
@@ -284,6 +285,7 @@ jobs:
               --base-sha256 "$BASE_IMAGE_SHA256" \
               --output build/omarchy-aarch64-ezvm.raw \
               --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
+              --ezvm-session-agent-unit build/dependencies/ezvm/GuestAgent/linux/ezvm-session-agent.service \
               --agent-source-url '${{ steps.sources.outputs.ezvm_agent_url }}' \
               --agent-source-ref '${{ steps.sources.outputs.ezvm_agent_ref }}' \
               --expected-omarchy-ref '${{ steps.sources.outputs.omarchy_ref }}' \
