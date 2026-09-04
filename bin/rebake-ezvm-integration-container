@@ -47,4 +47,8 @@ exec docker run --rm --privileged --user root \
   --mount "type=bind,source=$PROJECT_ROOT,target=/project" \
   --workdir /project \
   "$BUILDER_IMAGE" \
-  /project/bin/rebake-ezvm-integration "${args[@]}"
+  bash -lc '
+    set -euo pipefail
+    pacman -Syu --needed --noconfirm btrfs-progs util-linux
+    exec /project/bin/rebake-ezvm-integration "$@"
+  ' rebake-ezvm-integration "${args[@]}"

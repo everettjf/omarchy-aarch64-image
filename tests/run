@@ -810,6 +810,9 @@ grep -Fq -- '--ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy' \
   fail "release workflow does not bake the pinned wl-copy frontend"
 [[ -x $ROOT/bin/rebake-ezvm-integration && -x $ROOT/bin/rebake-ezvm-integration-container ]] ||
   fail "verified integration-only image rebake tools are not executable"
+grep -Fq 'pacman -Syu --needed --noconfirm btrfs-progs util-linux' \
+  "$ROOT/bin/rebake-ezvm-integration-container" ||
+  fail "integration rebake container does not provision its filesystem tools"
 [[ -x $ROOT/bin/reconstruct-ezvm-release ]] ||
   fail "pinned base-release reconstruction tool is not executable"
 grep -Fq '[[ $actual == "$BASE_SHA256" ]]' "$ROOT/bin/rebake-ezvm-integration" &&
