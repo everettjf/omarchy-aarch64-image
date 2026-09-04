@@ -783,16 +783,31 @@ grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
 grep -Fq -- '-X main.version=${{ steps.sources.outputs.ezvm_agent_ref }}' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not embed the pinned guest-agent revision as its runtime version"
+grep -Fq -- '--ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy' \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "release workflow does not bake the pinned wl-copy frontend"
+grep -Fq -- '--package wl-clipboard-rs-tools --bin wl-copy' \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "release workflow does not build the compatible wl-copy frontend"
 grep -Fq 'ReadWritePaths=/run /mnt/ezvm-shared' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
   fail "guest agent service cannot write the EZVM shared folder"
 source "$ROOT/sources.env"
 [[ $EZVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
   fail "EZVM guest agent source is not pinned to a full commit"
+[[ $WL_CLIPBOARD_RS_REF =~ ^[0-9a-f]{40}$ ]] ||
+  fail "wl-copy source is not pinned to a full commit"
 for field in ezvm_guest_agent_source_url ezvm_guest_agent_source_ref ezvm_guest_agent_sha256; do
   grep -Fq "printf '$field=%s\\n'" "$ROOT/bin/build-image" ||
     fail "image provenance does not record $field"
 done
+for field in ezvm_wl_copy_source_url ezvm_wl_copy_source_ref ezvm_wl_copy_sha256; do
+  grep -Fq "printf '$field=%s\\n'" "$ROOT/bin/build-image" ||
+    fail "image provenance does not record $field"
+done
+grep -Fq 'install -m755 "$EZVM_WL_COPY_BINARY" "$MOUNT_DIR/usr/local/bin/wl-copy"' \
+  "$ROOT/bin/build-image" ||
+  fail "image does not install the verified wl-copy frontend ahead of /usr/bin"
 grep -Fq 'What=ezvm-agent' \
   "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-ezvm\\x2dagent\\x2dconfig.mount" ||
   fail "image does not mount the host-provided EZVM enrollment share"

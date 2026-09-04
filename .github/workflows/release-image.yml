@@ -74,6 +74,10 @@ jobs:
           echo "packages_ref=$OMARCHY_PKGS_AARCH64_REF" >> "$GITHUB_OUTPUT"
           echo "ezvm_agent_url=$EZVM_GUEST_AGENT_URL" >> "$GITHUB_OUTPUT"
           echo "ezvm_agent_ref=$EZVM_GUEST_AGENT_REF" >> "$GITHUB_OUTPUT"
+          wl_clipboard_rs_repository=${WL_CLIPBOARD_RS_URL#https://github.com/}
+          wl_clipboard_rs_repository=${wl_clipboard_rs_repository%.git}
+          echo "wl_clipboard_rs_repository=$wl_clipboard_rs_repository" >> "$GITHUB_OUTPUT"
+          echo "wl_clipboard_rs_ref=$WL_CLIPBOARD_RS_REF" >> "$GITHUB_OUTPUT"
           echo "cache_week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned Omarchy source
@@ -100,6 +104,14 @@ jobs:
           path: build/dependencies/ezvm
           persist-credentials: false
 
+      - name: Checkout pinned Wayland clipboard frontend
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.sources.outputs.wl_clipboard_rs_repository }}
+          ref: ${{ steps.sources.outputs.wl_clipboard_rs_ref }}
+          path: build/dependencies/wl-clipboard-rs
+          persist-credentials: false
+
       - name: Build pinned EZVM guest agent
         shell: bash
         run: |
@@ -114,6 +126,19 @@ jobs:
           )
           file build/dependencies/ezvm-agent/ezvm-agent |
             grep -q 'ELF 64-bit.*ARM aarch64.*statically linked'
+
+      - name: Build pinned Wayland clipboard frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release \
+            --manifest-path build/dependencies/wl-clipboard-rs/Cargo.toml \
+            --package wl-clipboard-rs-tools --bin wl-copy
+          install -Dm755 \
+            build/dependencies/wl-clipboard-rs/target/release/wl-copy \
+            build/dependencies/ezvm-agent/wl-copy
+          file build/dependencies/ezvm-agent/wl-copy |
+            grep -q 'ELF 64-bit.*ARM aarch64'
 
       - name: Restore verified rolling inputs
         id: input-cache
@@ -169,6 +194,7 @@ jobs:
           ./bin/build-image-container \
             --omarchy-source build/dependencies/omarchy-aarch64 \
             --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
+            --ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy \
             --force
           (cd build && sha256sum --check omarchy-aarch64-ezvm.raw.sha256)
           df -h /

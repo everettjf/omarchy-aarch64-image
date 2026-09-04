@@ -9,6 +9,7 @@ readonly BUILDER_IMAGE=${OMARCHY_AARCH64_BUILDER_IMAGE:-omarchy-pkg-builder:late
 SOURCE_MOUNT=""
 REPOSITORY_MOUNT=""
 AGENT_MOUNT=""
+WL_COPY_MOUNT=""
 CONTAINER_ARGS=()
 
 fail() {
@@ -57,6 +58,14 @@ while (($#)); do
       CONTAINER_ARGS+=(--ezvm-guest-agent /ezvm-agent)
       shift 2
       ;;
+    --ezvm-wl-copy)
+      (($# >= 2)) || fail "--ezvm-wl-copy requires a path"
+      [[ -z $WL_COPY_MOUNT ]] || fail "--ezvm-wl-copy may only be specified once"
+      WL_COPY_MOUNT=$(resolve_existing_path "$2") || fail "EZVM wl-copy not found: $2"
+      [[ -f $WL_COPY_MOUNT ]] || fail "EZVM wl-copy is not a file: $2"
+      CONTAINER_ARGS+=(--ezvm-wl-copy /ezvm-wl-copy)
+      shift 2
+      ;;
     *)
       CONTAINER_ARGS+=("$1")
       shift
@@ -76,6 +85,9 @@ if [[ -n $REPOSITORY_MOUNT ]]; then
 fi
 if [[ -n $AGENT_MOUNT ]]; then
   DOCKER_ARGS+=(--mount "type=bind,source=$AGENT_MOUNT,target=/ezvm-agent,readonly")
+fi
+if [[ -n $WL_COPY_MOUNT ]]; then
+  DOCKER_ARGS+=(--mount "type=bind,source=$WL_COPY_MOUNT,target=/ezvm-wl-copy,readonly")
 fi
 
 exec docker "${DOCKER_ARGS[@]}" \

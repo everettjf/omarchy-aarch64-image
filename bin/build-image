@@ -29,6 +29,7 @@ ROOTFS_KEYRING=""
 ROOTFS_VERIFY_KEYRING=""
 NODE_TARBALL=""
 EZVM_GUEST_AGENT_BINARY=""
+EZVM_WL_COPY_BINARY=""
 OMARCHY_REPOSITORY_MANIFEST=""
 OMARCHY_REPOSITORY_KEY=""
 OMARCHY_REPOSITORY_GENERATED_AT=""
@@ -84,6 +85,7 @@ Options:
   --rootfs-keyring PATH  Arch Linux ARM GPG keyring
   --node-tarball PATH    Use a local linux-arm64 Node.js archive
   --ezvm-guest-agent P   Statically linked EZVM linux-arm64 guest agent
+  --ezvm-wl-copy PATH    Pinned linux-arm64 wl-copy integration frontend
   --refresh              Refresh cached rolling downloads
   --force                Replace the exact requested output path(s)
   -h, --help             Show this help
@@ -189,6 +191,11 @@ parse_args() {
         EZVM_GUEST_AGENT_BINARY=$(absolute_path "$2")
         shift 2
         ;;
+      --ezvm-wl-copy)
+        (($# >= 2)) || fail "--ezvm-wl-copy requires a path"
+        EZVM_WL_COPY_BINARY=$(absolute_path "$2")
+        shift 2
+        ;;
       --refresh)
         REFRESH=1
         shift
@@ -227,6 +234,11 @@ validate_configuration() {
   file "$EZVM_GUEST_AGENT_BINARY" |
     grep -q 'ELF 64-bit.*ARM aarch64.*statically linked' ||
     fail "EZVM guest agent must be a statically linked AArch64 ELF executable"
+  [[ -n $EZVM_WL_COPY_BINARY && -f $EZVM_WL_COPY_BINARY ]] ||
+    fail "--ezvm-wl-copy must name the pinned linux-arm64 wl-copy frontend"
+  file "$EZVM_WL_COPY_BINARY" |
+    grep -q 'ELF 64-bit.*ARM aarch64' ||
+    fail "EZVM wl-copy frontend must be an AArch64 ELF executable"
 
   image_bytes=$(numfmt --from=iec "$IMAGE_SIZE") || fail "invalid image size: $IMAGE_SIZE"
   ((image_bytes >= 16 * 1024 * 1024 * 1024)) || fail "image size must be at least 16 GiB"
@@ -908,6 +920,10 @@ EOF
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
   install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"
   install -m755 "$EZVM_GUEST_AGENT_BINARY" "$MOUNT_DIR/usr/local/sbin/ezvm-agent"
+  # /usr/local/bin precedes the packaged /usr/bin implementation for both the
+  # Session Agent and interactive Omarchy shells. Keep wl-paste packaged until
+  # there is evidence that its read path also needs replacement.
+  install -m755 "$EZVM_WL_COPY_BINARY" "$MOUNT_DIR/usr/local/bin/wl-copy"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
   install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
@@ -1146,6 +1162,10 @@ write_image_provenance() {
     printf 'ezvm_guest_agent_source_ref=%s\n' "$EZVM_GUEST_AGENT_REF"
     printf 'ezvm_guest_agent_sha256=%s\n' \
       "$(sha256sum "$EZVM_GUEST_AGENT_BINARY" | awk '{print $1}')"
+    printf 'ezvm_wl_copy_source_url=%s\n' "$WL_CLIPBOARD_RS_URL"
+    printf 'ezvm_wl_copy_source_ref=%s\n' "$WL_CLIPBOARD_RS_REF"
+    printf 'ezvm_wl_copy_sha256=%s\n' \
+      "$(sha256sum "$EZVM_WL_COPY_BINARY" | awk '{print $1}')"
     printf 'omarchy_source=%s\n' "$OMARCHY_SOURCE_COMMIT"
     printf 'omarchy_source_url=%s\n' "$OMARCHY_AARCH64_URL"
     printf 'omarchy_source_ref=%s\n' "$OMARCHY_AARCH64_REF"
@@ -1216,6 +1236,7 @@ validate_target() {
     usr/bin/limine-snapper-sync
     usr/local/sbin/omarchy-ezvm-ensure-bootable
     usr/local/sbin/ezvm-agent
+    usr/local/bin/wl-copy
     usr/share/libalpm/hooks/zzzz-omarchy-ezvm-boot-fallback.hook
     usr/share/omarchy-aarch64/repository-manifest.json
     usr/share/pacman/keyrings/omarchy-aarch64.gpg
