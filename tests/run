@@ -813,6 +813,8 @@ grep -Fxq 'NoNewPrivileges=true' "$session_agent" ||
   fail "Session Agent can gain privileges"
 grep -Fxq 'ProtectSystem=strict' "$session_agent" ||
   fail "Session Agent does not protect the guest system tree"
+grep -Fxq 'ReadWritePaths=/run/ezvm-agent/sessions' "$session_agent" ||
+  fail "Session Agent cannot write its narrowly scoped runtime socket"
 grep -Eq '^[[:space:]]*wl-clipboard([[:space:]]*(#.*)?)?$' \
   "$ROOT/profiles/aarch64-virt/runtime-packages" ||
   fail "Session Agent clipboard dependency is not explicit"
