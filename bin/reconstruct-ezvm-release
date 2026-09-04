@@ -32,6 +32,10 @@ file_size() {
 cleanup() {
   local status=$?
   trap - EXIT
+  # Bash 3.2 on macOS treats an initialized empty array as unbound under
+  # nounset. Cleanup must remain safe before any metadata staging occurs and
+  # after a successful commit clears the array.
+  set +u
   if ((COMPLETE == 0)) && [[ -n $STAGED && -f $STAGED && ! -L $STAGED ]]; then
     rm -f -- "$STAGED"
   fi
