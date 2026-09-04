@@ -562,6 +562,14 @@ grep -Fq "if: github.event_name == 'push' || inputs.publish_release" \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "manual image validation can accidentally publish a draft as latest"
 pass "manual image validation remains a draft unless publication is explicit"
+grep -Fq '(^|[.-])(alpha|beta|rc)([.-]|$)' \
+  "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq -- '--draft=false --prerelease' \
+    "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq -- '--draft=false --latest' \
+    "$ROOT/.github/workflows/release-image.yml" ||
+  fail "image publication does not separate prerelease and stable latest channels"
+pass "Alpha, Beta, and RC images publish as prereleases without replacing latest stable"
 grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
 (

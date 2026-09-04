@@ -369,4 +369,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: gh release edit "$RELEASE_TAG" --draft=false --latest
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" =~ (^|[.-])(alpha|beta|rc)([.-]|$) ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi
