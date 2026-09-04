@@ -902,6 +902,10 @@ pass "integration-only rebake preserves OS provenance and binds the new Agent to
     fail "release with missing package inventory was accepted"
   fi
   [[ ! -e $fixture/missing-inventory.raw && ! -e $fixture/missing-inventory.raw.part ]]
+  [[ ! -e $fixture/missing-inventory.all-packages.txt ]]
+  [[ ! -e $fixture/missing-inventory.all-packages.txt.part ]]
+  [[ ! -e $fixture/missing-inventory.explicit-packages.txt ]]
+  [[ ! -e $fixture/missing-inventory.explicit-packages.txt.part ]]
   mv "$fixture/base.packages.tsv.missing" "$fixture/base.packages.tsv"
   "$ROOT/bin/reconstruct-ezvm-release" \
     --assets "$fixture" --output "$fixture/result.raw" \

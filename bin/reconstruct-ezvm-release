@@ -10,6 +10,7 @@ EXPECTED_TAG=""
 EXPECTED_SHA256=""
 FORCE=0
 STAGED=""
+STAGED_METADATA=()
 COMPLETE=0
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -34,6 +35,12 @@ cleanup() {
   if ((COMPLETE == 0)) && [[ -n $STAGED && -f $STAGED && ! -L $STAGED ]]; then
     rm -f -- "$STAGED"
   fi
+  local staged_metadata
+  for staged_metadata in "${STAGED_METADATA[@]}"; do
+    if [[ -f $staged_metadata && ! -L $staged_metadata ]]; then
+      rm -f -- "$staged_metadata"
+    fi
+  done
   exit "$status"
 }
 trap cleanup EXIT
@@ -98,19 +105,34 @@ cat -- "${parts[@]}" | gzip -dc | perl "$PROJECT_ROOT/bin/decode-ezvm-sparse" "$
 [[ $(sha256sum "$STAGED" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || fail "reconstructed image checksum mismatch"
 
 output_stem=${OUTPUT_IMAGE%.raw}
+metadata_sources=()
+metadata_destinations=()
 for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
   matches=("$ASSET_DIR"/*."$suffix")
   if ((${#matches[@]} == 1)) && [[ -f ${matches[0]} && ! -L ${matches[0]} ]]; then
     destination="$output_stem.$suffix"
     if [[ ${matches[0]} != "$destination" ]]; then
-      install -m644 "${matches[0]}" "$destination"
+      metadata_sources+=("${matches[0]}")
+      metadata_destinations+=("$destination")
     fi
   elif [[ $suffix != orphans.txt ]]; then
     fail "release must contain exactly one $suffix inventory"
   fi
 done
 
+for index in "${!metadata_sources[@]}"; do
+  staged_metadata="${metadata_destinations[$index]}.part"
+  [[ ! -e $staged_metadata && ! -L $staged_metadata ]] || \
+    fail "staged metadata already exists: $staged_metadata"
+  install -m644 "${metadata_sources[$index]}" "$staged_metadata"
+  STAGED_METADATA+=("$staged_metadata")
+done
+
 mv -f -- "$STAGED" "$OUTPUT_IMAGE"
 STAGED=""
+for index in "${!STAGED_METADATA[@]}"; do
+  mv -f -- "${STAGED_METADATA[$index]}" "${metadata_destinations[$index]}"
+done
+STAGED_METADATA=()
 COMPLETE=1
 printf 'Reconstructed and verified pinned base image: %s\n' "$OUTPUT_IMAGE"
