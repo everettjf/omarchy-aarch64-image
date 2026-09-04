@@ -36,6 +36,7 @@ cleanup() {
   fi
   exit "$status"
 }
+trap cleanup EXIT
 
 while (($#)); do
   case $1 in
@@ -100,7 +101,10 @@ output_stem=${OUTPUT_IMAGE%.raw}
 for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
   matches=("$ASSET_DIR"/*."$suffix")
   if ((${#matches[@]} == 1)) && [[ -f ${matches[0]} && ! -L ${matches[0]} ]]; then
-    install -m644 "${matches[0]}" "$output_stem.$suffix"
+    destination="$output_stem.$suffix"
+    if [[ ${matches[0]} != "$destination" ]]; then
+      install -m644 "${matches[0]}" "$destination"
+    fi
   elif [[ $suffix != orphans.txt ]]; then
     fail "release must contain exactly one $suffix inventory"
   fi

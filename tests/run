@@ -895,6 +895,19 @@ pass "integration-only rebake preserves OS provenance and binds the new Agent to
     --tag fixture-1 --sha256 "$raw_sha"
   cmp -s "$fixture/base.raw" "$fixture/result.raw"
   [[ -f $fixture/result.packages.tsv ]]
+  "$ROOT/bin/reconstruct-ezvm-release" \
+    --assets "$fixture" --output "$fixture/base.raw" --force \
+    --tag fixture-1 --sha256 "$raw_sha"
+  [[ $(sha256sum "$fixture/base.raw" | awk '{print $1}') == "$raw_sha" ]]
+  [[ $(cat "$fixture/base.packages.tsv") == fixture ]]
+  mv "$fixture/base.packages.tsv" "$fixture/base.packages.tsv.missing"
+  if "$ROOT/bin/reconstruct-ezvm-release" \
+    --assets "$fixture" --output "$fixture/missing-inventory.raw" \
+    --tag fixture-1 --sha256 "$raw_sha" >/dev/null 2>&1; then
+    fail "release with missing package inventory was accepted"
+  fi
+  [[ ! -e $fixture/missing-inventory.raw && ! -e $fixture/missing-inventory.raw.part ]]
+  mv "$fixture/base.packages.tsv.missing" "$fixture/base.packages.tsv"
   printf 'tamper' >>"$fixture/base.part"
   if "$ROOT/bin/reconstruct-ezvm-release" \
     --assets "$fixture" --output "$fixture/tampered.raw" \
