@@ -1,0 +1,219 @@
+#!/bin/bash
+
+set -euo pipefail
+
+BASE_IMAGE=""
+BASE_SHA256=""
+OUTPUT_IMAGE=""
+AGENT_BINARY=""
+AGENT_SOURCE_URL=""
+AGENT_SOURCE_REF=""
+EXPECTED_OMARCHY_REF=""
+EXPECTED_WL_COPY_REF=""
+FORCE=0
+LOOP_DEVICE=""
+TOP_LEVEL=""
+STAGED_IMAGE=""
+COMPLETE=0
+
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[32m==>\033[0m %s\n' "$*"; }
+absolute_path() { realpath -m "$1"; }
+require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
+
+usage() {
+  cat <<'EOF'
+Usage: sudo ./bin/rebake-ezvm-integration [options]
+
+Required options:
+  --base-image PATH       Previously verified sparse raw factory image
+  --base-sha256 DIGEST    Expected SHA-256 of the complete base image
+  --output PATH           New sparse raw image (must differ from the base)
+  --ezvm-guest-agent PATH Statically linked Linux ARM64 Guest Agent
+  --agent-source-url URL  Source repository recorded in image provenance
+  --agent-source-ref SHA  Full source commit embedded in the Agent
+  --expected-omarchy-ref SHA  Required unchanged Omarchy source commit
+  --expected-wl-copy-ref SHA   Required unchanged wl-copy source commit
+
+Optional:
+  --force                 Replace the exact output and metadata paths
+  -h, --help              Show this help
+
+This operation preserves the verified operating-system package graph. It
+updates only the EZVM Guest Agent in both the bootable root and the read-only
+factory snapshot, then records the base digest and new Agent provenance.
+EOF
+}
+
+parse_args() {
+  while (($#)); do
+    case $1 in
+      --base-image) (($# >= 2)) || fail "--base-image requires a path"; BASE_IMAGE=$(absolute_path "$2"); shift 2 ;;
+      --base-sha256) (($# >= 2)) || fail "--base-sha256 requires a digest"; BASE_SHA256=$2; shift 2 ;;
+      --output) (($# >= 2)) || fail "--output requires a path"; OUTPUT_IMAGE=$(absolute_path "$2"); shift 2 ;;
+      --ezvm-guest-agent) (($# >= 2)) || fail "--ezvm-guest-agent requires a path"; AGENT_BINARY=$(absolute_path "$2"); shift 2 ;;
+      --agent-source-url) (($# >= 2)) || fail "--agent-source-url requires a URL"; AGENT_SOURCE_URL=$2; shift 2 ;;
+      --agent-source-ref) (($# >= 2)) || fail "--agent-source-ref requires a commit"; AGENT_SOURCE_REF=$2; shift 2 ;;
+      --expected-omarchy-ref) (($# >= 2)) || fail "--expected-omarchy-ref requires a commit"; EXPECTED_OMARCHY_REF=$2; shift 2 ;;
+      --expected-wl-copy-ref) (($# >= 2)) || fail "--expected-wl-copy-ref requires a commit"; EXPECTED_WL_COPY_REF=$2; shift 2 ;;
+      --force) FORCE=1; shift ;;
+      -h | --help) usage; exit 0 ;;
+      *) fail "unknown option: $1" ;;
+    esac
+  done
+}
+
+validate_inputs() {
+  local actual
+  [[ $(id -u) == 0 ]] || fail "rebaking requires root"
+  [[ -f $BASE_IMAGE && ! -L $BASE_IMAGE ]] || fail "base image is missing or unsafe: $BASE_IMAGE"
+  [[ -f $AGENT_BINARY && ! -L $AGENT_BINARY ]] || fail "Guest Agent is missing or unsafe: $AGENT_BINARY"
+  [[ $BASE_SHA256 =~ ^[0-9a-f]{64}$ ]] || fail "base SHA-256 must contain 64 lowercase hex characters"
+  [[ $AGENT_SOURCE_REF =~ ^[0-9a-f]{40}$ ]] || fail "Agent source ref must be a full commit"
+  [[ $EXPECTED_OMARCHY_REF =~ ^[0-9a-f]{40}$ ]] || fail "expected Omarchy ref must be a full commit"
+  [[ $EXPECTED_WL_COPY_REF =~ ^[0-9a-f]{40}$ ]] || fail "expected wl-copy ref must be a full commit"
+  [[ $AGENT_SOURCE_URL == https://* ]] || fail "Agent source URL must use HTTPS"
+  [[ -n $OUTPUT_IMAGE && $OUTPUT_IMAGE != "$BASE_IMAGE" ]] || fail "output must differ from the base image"
+  [[ -d ${OUTPUT_IMAGE%/*} && ! -L ${OUTPUT_IMAGE%/*} ]] || fail "output directory is missing or unsafe"
+  if [[ -e $OUTPUT_IMAGE || -L $OUTPUT_IMAGE ]]; then
+    ((FORCE == 1)) || fail "output already exists: $OUTPUT_IMAGE"
+    [[ -f $OUTPUT_IMAGE && ! -L $OUTPUT_IMAGE ]] || fail "existing output is unsafe: $OUTPUT_IMAGE"
+  fi
+  file "$AGENT_BINARY" | grep -Eq 'ELF 64-bit.*ARM aarch64.*statically linked' ||
+    fail "Guest Agent must be a statically linked Linux ARM64 executable"
+  actual=$(sha256sum "$BASE_IMAGE" | awk '{print $1}')
+  [[ $actual == "$BASE_SHA256" ]] || fail "base image SHA-256 mismatch"
+}
+
+validate_base_provenance() {
+  local provenance=$1
+  grep -qxF "omarchy_source_ref=$EXPECTED_OMARCHY_REF" "$provenance" ||
+    fail "base image Omarchy revision differs from the current pinned input"
+  grep -qxF "ezvm_wl_copy_source_ref=$EXPECTED_WL_COPY_REF" "$provenance" ||
+    fail "base image wl-copy revision differs from the current pinned input"
+}
+
+copy_package_metadata() {
+  local suffix source destination
+  local base_stem=${BASE_IMAGE%.raw}
+  local output_stem=${OUTPUT_IMAGE%.raw}
+  for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
+    source="$base_stem.$suffix"
+    destination="$output_stem.$suffix"
+    if [[ -f $source && ! -L $source ]]; then
+      install -m644 "$source" "$destination.part"
+      mv -f -- "$destination.part" "$destination"
+    elif [[ $suffix != orphans.txt ]]; then
+      fail "base package metadata is missing: $source"
+    fi
+  done
+}
+
+rewrite_provenance() {
+  local root=$1 provenance="$1/usr/share/omarchy-aarch64/image-build.txt"
+  local staged="$provenance.rebake"
+  [[ -f $provenance && ! -L $provenance ]] || fail "base image provenance is missing or unsafe"
+  for field in ezvm_guest_agent_source_url ezvm_guest_agent_source_ref ezvm_guest_agent_sha256; do
+    grep -q "^${field}=" "$provenance" || fail "base image provenance lacks $field"
+  done
+  awk '
+    !/^ezvm_guest_agent_source_url=/ &&
+    !/^ezvm_guest_agent_source_ref=/ &&
+    !/^ezvm_guest_agent_sha256=/ &&
+    !/^ezvm_integration_rebaked_at=/ &&
+    !/^ezvm_integration_base_raw_sha256=/
+  ' "$provenance" >"$staged"
+  {
+    printf 'ezvm_guest_agent_source_url=%s\n' "$AGENT_SOURCE_URL"
+    printf 'ezvm_guest_agent_source_ref=%s\n' "$AGENT_SOURCE_REF"
+    printf 'ezvm_guest_agent_sha256=%s\n' "$(sha256sum "$AGENT_BINARY" | awk '{print $1}')"
+    printf 'ezvm_integration_rebaked_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'ezvm_integration_base_raw_sha256=%s\n' "$BASE_SHA256"
+  } >>"$staged"
+  install -m644 "$staged" "$provenance"
+  rm -f -- "$staged"
+  install -m644 "$provenance" "${OUTPUT_IMAGE%/*}/image-provenance.txt.part"
+  mv -f -- "${OUTPUT_IMAGE%/*}/image-provenance.txt.part" "${OUTPUT_IMAGE%/*}/image-provenance.txt"
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  sync || true
+  if [[ -n $TOP_LEVEL ]] && findmnt -rn --target "$TOP_LEVEL" >/dev/null 2>&1; then
+    umount "$TOP_LEVEL" || true
+  fi
+  [[ -z $LOOP_DEVICE ]] || losetup -d "$LOOP_DEVICE" >/dev/null 2>&1 || true
+  [[ -z $TOP_LEVEL || ! -d $TOP_LEVEL ]] || rmdir "$TOP_LEVEL" 2>/dev/null || true
+  if ((COMPLETE == 0)) && [[ -n $STAGED_IMAGE && -f $STAGED_IMAGE && ! -L $STAGED_IMAGE ]]; then
+    rm -f -- "$STAGED_IMAGE"
+  fi
+  exit "$status"
+}
+
+rebake_image() {
+  local root factory digest checksum_staged
+  STAGED_IMAGE="$OUTPUT_IMAGE.part"
+  [[ ! -e $STAGED_IMAGE && ! -L $STAGED_IMAGE ]] || fail "staged output already exists: $STAGED_IMAGE"
+  cp --reflink=auto --sparse=always "$BASE_IMAGE" "$STAGED_IMAGE"
+
+  LOOP_DEVICE=$(losetup --find --show --partscan "$STAGED_IMAGE")
+  udevadm settle
+  [[ -b ${LOOP_DEVICE}p2 ]] || fail "base image has no Btrfs root partition"
+  TOP_LEVEL=$(mktemp -d /tmp/omarchy-ezvm-rebake.XXXXXX)
+  mount -o subvolid=5 "${LOOP_DEVICE}p2" "$TOP_LEVEL"
+  root="$TOP_LEVEL/@"
+  factory="$TOP_LEVEL/@factory"
+  [[ -d $root && -d $factory ]] || fail "base image lacks @ or @factory Btrfs subvolume"
+  [[ $(btrfs property get -ts "$factory" ro) == 'ro=true' ]] || fail "base factory snapshot is not read-only"
+  [[ -f $root/usr/local/sbin/ezvm-agent && ! -L $root/usr/local/sbin/ezvm-agent ]] ||
+    fail "base Guest Agent path is missing or unsafe"
+  validate_base_provenance "$root/usr/share/omarchy-aarch64/image-build.txt"
+
+  install -m755 "$AGENT_BINARY" "$root/usr/local/sbin/ezvm-agent.rebake"
+  mv -f -- "$root/usr/local/sbin/ezvm-agent.rebake" "$root/usr/local/sbin/ezvm-agent"
+  rewrite_provenance "$root"
+  cmp -s "$AGENT_BINARY" "$root/usr/local/sbin/ezvm-agent" || fail "installed Guest Agent differs from the pinned binary"
+
+  btrfs property set -ts "$factory" ro false
+  btrfs subvolume delete "$factory"
+  btrfs subvolume snapshot "$root" "$factory"
+  btrfs property set -ts "$factory" ro true
+  cmp -s "$AGENT_BINARY" "$factory/usr/local/sbin/ezvm-agent" || fail "factory snapshot contains the wrong Guest Agent"
+  grep -qxF "ezvm_guest_agent_source_ref=$AGENT_SOURCE_REF" "$factory/usr/share/omarchy-aarch64/image-build.txt" ||
+    fail "factory snapshot contains the wrong Agent provenance"
+
+  sync
+  fstrim "$TOP_LEVEL" >/dev/null
+  umount "$TOP_LEVEL"
+  rmdir "$TOP_LEVEL"
+  TOP_LEVEL=""
+  losetup -d "$LOOP_DEVICE"
+  LOOP_DEVICE=""
+
+  copy_package_metadata
+  digest=$(sha256sum "$STAGED_IMAGE" | awk '{print $1}')
+  checksum_staged="$OUTPUT_IMAGE.sha256.part"
+  printf '%s  %s\n' "$digest" "${OUTPUT_IMAGE##*/}" >"$checksum_staged"
+  rm -f -- "$OUTPUT_IMAGE.sha256"
+  mv -f -- "$STAGED_IMAGE" "$OUTPUT_IMAGE"
+  STAGED_IMAGE=""
+  mv -f -- "$checksum_staged" "$OUTPUT_IMAGE.sha256"
+  COMPLETE=1
+  log "Integration rebake complete: $OUTPUT_IMAGE"
+}
+
+main() {
+  local command
+  parse_args "$@"
+  for command in awk btrfs cmp cp date file findmnt fstrim grep install losetup mktemp mount mv realpath sha256sum sync udevadm umount; do
+    require_command "$command"
+  done
+  validate_inputs
+  trap cleanup EXIT
+  rebake_image
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

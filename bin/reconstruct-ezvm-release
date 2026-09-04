@@ -1,0 +1,105 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly PROJECT_ROOT
+ASSET_DIR=""
+OUTPUT_IMAGE=""
+EXPECTED_TAG=""
+EXPECTED_SHA256=""
+FORCE=0
+STAGED=""
+COMPLETE=0
+
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+absolute_path() {
+  local directory basename
+  directory=$(cd -- "$(dirname -- "$1")" && pwd -P) || return 1
+  basename=$(basename -- "$1")
+  printf '%s/%s\n' "$directory" "$basename"
+}
+require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if ((COMPLETE == 0)) && [[ -n $STAGED && -f $STAGED && ! -L $STAGED ]]; then
+    rm -f -- "$STAGED"
+  fi
+  exit "$status"
+}
+
+while (($#)); do
+  case $1 in
+    --assets) (($# >= 2)) || fail "--assets requires a directory"; ASSET_DIR=$(absolute_path "$2"); shift 2 ;;
+    --output) (($# >= 2)) || fail "--output requires a path"; OUTPUT_IMAGE=$(absolute_path "$2"); shift 2 ;;
+    --tag) (($# >= 2)) || fail "--tag requires a value"; EXPECTED_TAG=$2; shift 2 ;;
+    --sha256) (($# >= 2)) || fail "--sha256 requires a digest"; EXPECTED_SHA256=$2; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+for command in awk basename cat dirname gzip install jq perl sha256sum stat; do require_command "$command"; done
+[[ -d $ASSET_DIR && ! -L $ASSET_DIR ]] || fail "asset directory is missing or unsafe"
+[[ $EXPECTED_TAG =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "expected tag is invalid"
+[[ $EXPECTED_SHA256 =~ ^[0-9a-f]{64}$ ]] || fail "expected SHA-256 is invalid"
+[[ -n $OUTPUT_IMAGE && -d ${OUTPUT_IMAGE%/*} && ! -L ${OUTPUT_IMAGE%/*} ]] || fail "output directory is missing or unsafe"
+if [[ -e $OUTPUT_IMAGE || -L $OUTPUT_IMAGE ]]; then
+  ((FORCE == 1)) || fail "output already exists: $OUTPUT_IMAGE"
+  [[ -f $OUTPUT_IMAGE && ! -L $OUTPUT_IMAGE ]] || fail "existing output is unsafe"
+fi
+
+manifest="$ASSET_DIR/ezvm-release-manifest.json"
+[[ -f $manifest && ! -L $manifest ]] || fail "release manifest is missing or unsafe"
+jq --exit-status --arg tag "$EXPECTED_TAG" --arg sha "$EXPECTED_SHA256" '
+  .schemaVersion == 1 and
+  .kind == "io.github.everettjf.ezvm.preinstalled-image" and
+  .architecture == "arm64" and
+  .release.tag == $tag and
+  .disk.format == "raw" and
+  .disk.sha256 == $sha and
+  (.disk.virtualSize | type == "number" and . > 0) and
+  .archive.compression == "ezvm-sparse-stream+gzip" and
+  (.archive.sha256 | test("^[0-9a-f]{64}$")) and
+  (.archive.parts | type == "array" and length > 0) and
+  ([.archive.parts[].name] | length == (unique | length)) and
+  all(.archive.parts[];
+    (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+    (.size | type == "number" and . > 0) and
+    (.sha256 | test("^[0-9a-f]{64}$")))
+' "$manifest" >/dev/null || fail "release manifest does not match the pinned base image"
+
+parts=()
+while IFS=$'\t' read -r name expected_size expected_sha; do
+  path="$ASSET_DIR/$name"
+  [[ -f $path && ! -L $path ]] || fail "release part is missing or unsafe: $name"
+  [[ $(stat -c %s "$path") == "$expected_size" ]] || fail "release part size mismatch: $name"
+  [[ $(sha256sum "$path" | awk '{print $1}') == "$expected_sha" ]] || fail "release part checksum mismatch: $name"
+  parts+=("$path")
+done < <(jq -r '.archive.parts[] | [.name, (.size | tostring), .sha256] | @tsv' "$manifest")
+
+archive_sha=$(cat -- "${parts[@]}" | sha256sum | awk '{print $1}')
+[[ $archive_sha == "$(jq -r '.archive.sha256' "$manifest")" ]] || fail "complete release archive checksum mismatch"
+
+STAGED="$OUTPUT_IMAGE.part"
+[[ ! -e $STAGED && ! -L $STAGED ]] || fail "staged output already exists: $STAGED"
+cat -- "${parts[@]}" | gzip -dc | perl "$PROJECT_ROOT/bin/decode-ezvm-sparse" "$STAGED"
+[[ $(stat -c %s "$STAGED") == "$(jq -r '.disk.virtualSize' "$manifest")" ]] || fail "reconstructed image size mismatch"
+[[ $(sha256sum "$STAGED" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || fail "reconstructed image checksum mismatch"
+
+output_stem=${OUTPUT_IMAGE%.raw}
+for suffix in all-packages.txt explicit-packages.txt packages.tsv orphans.txt; do
+  matches=("$ASSET_DIR"/*."$suffix")
+  if ((${#matches[@]} == 1)) && [[ -f ${matches[0]} && ! -L ${matches[0]} ]]; then
+    install -m644 "${matches[0]}" "$output_stem.$suffix"
+  elif [[ $suffix != orphans.txt ]]; then
+    fail "release must contain exactly one $suffix inventory"
+  fi
+done
+
+mv -f -- "$STAGED" "$OUTPUT_IMAGE"
+STAGED=""
+COMPLETE=1
+printf 'Reconstructed and verified pinned base image: %s\n' "$OUTPUT_IMAGE"

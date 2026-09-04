@@ -1,0 +1,50 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly PROJECT_ROOT
+readonly BUILDER_IMAGE=${OMARCHY_AARCH64_BUILDER_IMAGE:-omarchy-pkg-builder:latest-aarch64-edge}
+
+fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+container_path() {
+  local resolved
+  resolved=$(realpath -m "$1")
+  [[ $resolved == "$PROJECT_ROOT"/* ]] || fail "path must be inside the project: $1"
+  printf '/project/%s\n' "${resolved#"$PROJECT_ROOT"/}"
+}
+
+args=()
+while (($#)); do
+  case $1 in
+    --base-image | --output | --ezvm-guest-agent)
+      (($# >= 2)) || fail "$1 requires a path"
+      args+=("$1" "$(container_path "$2")")
+      shift 2
+      ;;
+    --base-sha256 | --agent-source-url | --agent-source-ref | --expected-omarchy-ref | --expected-wl-copy-ref)
+      (($# >= 2)) || fail "$1 requires a value"
+      args+=("$1" "$2")
+      shift 2
+      ;;
+    --force)
+      args+=("$1")
+      shift
+      ;;
+    -h | --help)
+      exec "$PROJECT_ROOT/bin/rebake-ezvm-integration" --help
+      ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+command -v docker >/dev/null 2>&1 || fail "missing required command: docker"
+docker info >/dev/null 2>&1 || fail "Docker is unavailable or its daemon is not running"
+docker image inspect "$BUILDER_IMAGE" >/dev/null 2>&1 || fail "builder image not found: $BUILDER_IMAGE"
+
+exec docker run --rm --privileged --user root \
+  --mount "type=bind,source=$PROJECT_ROOT,target=/project" \
+  --workdir /project \
+  "$BUILDER_IMAGE" \
+  /project/bin/rebake-ezvm-integration "${args[@]}"

@@ -808,6 +808,106 @@ grep -Fq -- '-X main.version=${{ steps.sources.outputs.ezvm_agent_ref }}' \
 grep -Fq -- '--ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not bake the pinned wl-copy frontend"
+[[ -x $ROOT/bin/rebake-ezvm-integration && -x $ROOT/bin/rebake-ezvm-integration-container ]] ||
+  fail "verified integration-only image rebake tools are not executable"
+[[ -x $ROOT/bin/reconstruct-ezvm-release ]] ||
+  fail "pinned base-release reconstruction tool is not executable"
+grep -Fq '[[ $actual == "$BASE_SHA256" ]]' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'btrfs property set -ts "$factory" ro false' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'btrfs subvolume snapshot "$root" "$factory"' "$ROOT/bin/rebake-ezvm-integration" &&
+  grep -Fq 'btrfs property set -ts "$factory" ro true' "$ROOT/bin/rebake-ezvm-integration" ||
+  fail "integration rebake does not verify its base and atomically refresh the factory snapshot"
+if sed -n '/^cleanup()/,/^}/p' "$ROOT/bin/rebake-ezvm-integration" | grep -Fq 'rm -rf'; then
+  fail "integration rebake cleanup recursively deletes a mount tree"
+fi
+(
+  # shellcheck source=../bin/rebake-ezvm-integration
+  source "$ROOT/bin/rebake-ezvm-integration"
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  root="$fixture/root"
+  OUTPUT_IMAGE="$fixture/output.raw"
+  AGENT_BINARY="$fixture/agent"
+  AGENT_SOURCE_URL=https://github.com/everettjf/ezvm.git
+  AGENT_SOURCE_REF=0123456789abcdef0123456789abcdef01234567
+  EXPECTED_OMARCHY_REF=1111111111111111111111111111111111111111
+  EXPECTED_WL_COPY_REF=2222222222222222222222222222222222222222
+  BASE_SHA256=abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd
+  mkdir -p "$root/usr/share/omarchy-aarch64"
+  printf 'new agent\n' >"$AGENT_BINARY"
+  cat >"$root/usr/share/omarchy-aarch64/image-build.txt" <<'EOF'
+built_at=2026-09-04T00:00:00Z
+rootfs_sha256=preserved
+omarchy_source_ref=1111111111111111111111111111111111111111
+ezvm_wl_copy_source_ref=2222222222222222222222222222222222222222
+ezvm_guest_agent_source_url=https://example.invalid/old.git
+ezvm_guest_agent_source_ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ezvm_guest_agent_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ezvm_integration_rebaked_at=old
+ezvm_integration_base_raw_sha256=old
+EOF
+  rewrite_provenance "$root"
+  provenance="$root/usr/share/omarchy-aarch64/image-build.txt"
+  validate_base_provenance "$provenance"
+  grep -qxF 'built_at=2026-09-04T00:00:00Z' "$provenance"
+  grep -qxF 'rootfs_sha256=preserved' "$provenance"
+  [[ $(grep -c '^ezvm_guest_agent_source_ref=' "$provenance") == 1 ]]
+  grep -qxF "ezvm_guest_agent_source_ref=$AGENT_SOURCE_REF" "$provenance"
+  grep -qxF "ezvm_integration_base_raw_sha256=$BASE_SHA256" "$provenance"
+  cmp -s "$provenance" "$fixture/image-provenance.txt"
+)
+pass "integration-only rebake preserves OS provenance and binds the new Agent to its verified base"
+(
+  fixture=$(mktemp -d)
+  trap 'rm -rf "$fixture"' EXIT
+  truncate -s 16M "$fixture/base.raw"
+  printf 'sparse fixture' | dd of="$fixture/base.raw" bs=1 seek=4096 conv=notrunc status=none
+  "$ROOT/bin/encode-ezvm-sparse" "$fixture/base.raw" |
+    gzip -1 -n >"$fixture/base.part"
+  raw_sha=$(sha256sum "$fixture/base.raw" | awk '{print $1}')
+  archive_sha=$(sha256sum "$fixture/base.part" | awk '{print $1}')
+  archive_size=$(stat -c %s "$fixture/base.part")
+  jq -n --arg raw_sha "$raw_sha" --arg archive_sha "$archive_sha" \
+    --argjson archive_size "$archive_size" '
+      {
+        schemaVersion: 1,
+        kind: "io.github.everettjf.ezvm.preinstalled-image",
+        architecture: "arm64",
+        release: {tag: "fixture-1"},
+        disk: {format: "raw", sha256: $raw_sha, virtualSize: 16777216},
+        archive: {
+          compression: "ezvm-sparse-stream+gzip",
+          sha256: $archive_sha,
+          parts: [{name: "base.part", size: $archive_size, sha256: $archive_sha}]
+        }
+      }
+    ' >"$fixture/ezvm-release-manifest.json"
+  for suffix in all-packages.txt explicit-packages.txt packages.tsv; do
+    printf 'fixture\n' >"$fixture/base.$suffix"
+  done
+  "$ROOT/bin/reconstruct-ezvm-release" \
+    --assets "$fixture" --output "$fixture/result.raw" \
+    --tag fixture-1 --sha256 "$raw_sha"
+  cmp -s "$fixture/base.raw" "$fixture/result.raw"
+  [[ -f $fixture/result.packages.tsv ]]
+  printf 'tamper' >>"$fixture/base.part"
+  if "$ROOT/bin/reconstruct-ezvm-release" \
+    --assets "$fixture" --output "$fixture/tampered.raw" \
+    --tag fixture-1 --sha256 "$raw_sha" >/dev/null 2>&1; then
+    fail "tampered base release part was accepted"
+  fi
+  [[ ! -e $fixture/tampered.raw && ! -e $fixture/tampered.raw.part ]]
+)
+pass "pinned split release reconstruction verifies every layer and preserves sparse bytes"
+grep -Fq 'base_release_tag:' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'base_image_sha256:' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq './bin/reconstruct-ezvm-release' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq './bin/rebake-ezvm-integration-container' "$ROOT/.github/workflows/release-image.yml" ||
+  fail "release workflow cannot produce a digest-pinned integration-only rebake"
+grep -Fq "if: steps.base.outputs.use_rebake != 'true'" \
+  "$ROOT/.github/workflows/release-image.yml" ||
+  fail "integration-only rebakes can publish unrelated rolling-input caches"
+pass "release workflow keeps full rebuilds and digest-pinned integration rebakes separate"
 grep -Fq -- '--package wl-clipboard-rs-tools --bin wl-copy' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not build the compatible wl-copy frontend"

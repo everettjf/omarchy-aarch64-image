@@ -15,6 +15,14 @@ on:
         required: false
         default: false
         type: boolean
+      base_release_tag:
+        description: Optional verified release to rebake when only EZVM integration changed
+        required: false
+        type: string
+      base_image_sha256:
+        description: Required complete raw SHA-256 when base_release_tag is set
+        required: false
+        type: string
 
 concurrency:
   group: aarch64-image-release
@@ -79,6 +87,29 @@ jobs:
           echo "wl_clipboard_rs_repository=$wl_clipboard_rs_repository" >> "$GITHUB_OUTPUT"
           echo "wl_clipboard_rs_ref=$WL_CLIPBOARD_RS_REF" >> "$GITHUB_OUTPUT"
           echo "cache_week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve optional integration-only base
+        id: base
+        env:
+          BASE_RELEASE_TAG: ${{ inputs.base_release_tag }}
+          BASE_IMAGE_SHA256: ${{ inputs.base_image_sha256 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BASE_RELEASE_TAG" && -z "$BASE_IMAGE_SHA256" ]]; then
+            echo 'use_rebake=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ $BASE_RELEASE_TAG =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+            echo 'A valid base_release_tag is required when rebaking.' >&2
+            exit 1
+          }
+          [[ $BASE_IMAGE_SHA256 =~ ^[0-9a-f]{64}$ ]] || {
+            echo 'A complete lowercase base_image_sha256 is required when rebaking.' >&2
+            exit 1
+          }
+          echo 'use_rebake=true' >> "$GITHUB_OUTPUT"
+          echo "tag=$BASE_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha256=$BASE_IMAGE_SHA256" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned Omarchy source
         uses: actions/checkout@v7
@@ -186,23 +217,94 @@ jobs:
           OMARCHY_TEST_SOURCE: build/dependencies/omarchy-aarch64
         run: ./tests/run
 
+      - name: Reconstruct and verify pinned base release
+        if: steps.base.outputs.use_rebake == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_RELEASE_TAG: ${{ steps.base.outputs.tag }}
+          BASE_IMAGE_SHA256: ${{ steps.base.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/base-release
+          gh release download "$BASE_RELEASE_TAG" --dir build/base-release
+          ./bin/reconstruct-ezvm-release \
+            --assets build/base-release \
+            --output build/base.raw \
+            --tag "$BASE_RELEASE_TAG" \
+            --sha256 "$BASE_IMAGE_SHA256"
+
+      - name: Prove integration-only change scope
+        if: steps.base.outputs.use_rebake == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_RELEASE_TAG: ${{ steps.base.outputs.tag }}
+          OMARCHY_REF: ${{ steps.sources.outputs.omarchy_ref }}
+          WL_COPY_REF: ${{ steps.sources.outputs.wl_clipboard_rs_ref }}
+        run: |
+          set -euo pipefail
+          target=$(gh release view "$BASE_RELEASE_TAG" --json targetCommitish --jq .targetCommitish)
+          base_commit=$(git rev-parse "$target^{commit}")
+          git merge-base --is-ancestor "$base_commit" HEAD || {
+            echo 'The base Release does not belong to the current source history.' >&2
+            exit 1
+          }
+          while IFS= read -r path; do
+            case "$path" in
+              sources.env | bin/build-image | bin/reconstruct-ezvm-release | \
+                bin/rebake-ezvm-integration | bin/rebake-ezvm-integration-container | \
+                .github/workflows/release-image.yml | README.md | RELEASE_NOTES.md | \
+                docs/* | tests/*) ;;
+              *)
+                echo "Integration-only rebake rejected Guest-affecting change: $path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only "$base_commit" HEAD)
+          git show "$base_commit:sources.env" | sed '/^EZVM_GUEST_AGENT_REF=/d' >build/base-sources.env
+          sed '/^EZVM_GUEST_AGENT_REF=/d' sources.env >build/current-sources.env
+          cmp build/base-sources.env build/current-sources.env || {
+            echo 'A pinned input other than EZVM_GUEST_AGENT_REF changed.' >&2
+            exit 1
+          }
+          provenance=build/base-release/image-provenance.txt
+          grep -qxF "omarchy_source_ref=$OMARCHY_REF" "$provenance"
+          grep -qxF "ezvm_wl_copy_source_ref=$WL_COPY_REF" "$provenance"
+          rm -f -- build/base-sources.env build/current-sources.env
+
       - name: Build and verify the sparse raw image
         env:
           OMARCHY_IMAGE_LOW_DISK: '1'
+          USE_REBAKE: ${{ steps.base.outputs.use_rebake }}
+          BASE_IMAGE_SHA256: ${{ steps.base.outputs.sha256 }}
         run: |
           set -euo pipefail
-          ./bin/build-image-container \
-            --omarchy-source build/dependencies/omarchy-aarch64 \
-            --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
-            --ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy \
-            --force
+          if [[ "$USE_REBAKE" == true ]]; then
+            ./bin/rebake-ezvm-integration-container \
+              --base-image build/base.raw \
+              --base-sha256 "$BASE_IMAGE_SHA256" \
+              --output build/omarchy-aarch64-ezvm.raw \
+              --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
+              --agent-source-url '${{ steps.sources.outputs.ezvm_agent_url }}' \
+              --agent-source-ref '${{ steps.sources.outputs.ezvm_agent_ref }}' \
+              --expected-omarchy-ref '${{ steps.sources.outputs.omarchy_ref }}' \
+              --expected-wl-copy-ref '${{ steps.sources.outputs.wl_clipboard_rs_ref }}' \
+              --force
+            rm -f -- build/base.raw
+            find build/base-release -depth -delete
+          else
+            ./bin/build-image-container \
+              --omarchy-source build/dependencies/omarchy-aarch64 \
+              --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
+              --ezvm-wl-copy build/dependencies/ezvm-agent/wl-copy \
+              --force
+          fi
           (cd build && sha256sum --check omarchy-aarch64-ezvm.raw.sha256)
           df -h /
 
       # Save before packaging/upload so a later Release API failure does not
       # discard the already verified rootfs and Node.js inputs.
       - name: Save verified rolling inputs
-        if: steps.input-cache.outputs.cache-hit != 'true'
+        if: steps.base.outputs.use_rebake != 'true' && steps.input-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |

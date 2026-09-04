@@ -14,6 +14,14 @@ installation audit. If a local raw image is removed afterwards, reconstruct it
 from the numbered assets using `install-Omarchy-ezvm.command`; do not substitute
 an older raw image that happens to have the same product version.
 
+An integration-only Guest Agent rebake is allowed only when the base Release
+tag and its complete raw SHA-256 are supplied together. The reconstruction and
+rebake tools must verify all split assets, preserve the accepted package
+inventories, recreate the read-only factory snapshot from the updated bootable
+root, and bind both the base raw digest and new Agent commit into provenance.
+It does not waive any clean-workspace acceptance requirement and must not be
+used for other Guest or operating-system changes.
+
 The packager also copies available build evidence into the release layout:
 
 - `image-provenance.txt` records source URLs, commits, signatures, hashes, and
