@@ -73,7 +73,7 @@ jobs:
       - name: Checkout pinned RiftVM guest-agent source
         uses: actions/checkout@v7
         with:
-          repository: everettjf/riftvm
+          repository: riftvm/riftvm
           ref: ${{ steps.sources.outputs.riftvm_agent_ref }}
           path: build/dependencies/riftvm
           persist-credentials: false
