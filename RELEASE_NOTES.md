@@ -1,14 +1,14 @@
-## Omarchy for EZVM
+## Omarchy for RiftVM
 
-This Release contains only the verified sparse AArch64 Omarchy image for EZVM.
+This Release contains only the verified sparse AArch64 Omarchy image for RiftVM.
 It is designed for Apple silicon and Apple's Virtualization.framework.
 
 ## Quick install
 
-Install or update EZVM and import Omarchy with one command:
+Install or update RiftVM and import Omarchy with one command:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/riftvm/main/scripts/install-omarchy.sh)"
 ```
 
 Requirements:
@@ -18,15 +18,15 @@ Requirements:
 - Homebrew; and
 - at least 15 GiB free.
 
-If EZVM 1.0.0 or newer is already installed, run the image-only installer:
+If RiftVM 1.0.0 or newer is already installed, run the image-only installer:
 
 ```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-riftvm.command | /bin/bash'
 ```
 
 The installer verifies the manifest, every split part, the complete compressed
 stream, the reconstructed raw disk, and the bundled thumbnail before asking
-EZVM to create a new machine with fresh identity and NVRAM storage.
+RiftVM to create a new machine with fresh identity and NVRAM storage.
 
 Do not download the numbered image parts manually. The installer streams,
 verifies, decodes, and imports them in the required order.
@@ -37,7 +37,7 @@ The Release is published only after:
 
 - the native AArch64 build and package contracts pass;
 - the sparse raw image checksum passes;
-- the EZVM release packager verifies its output;
+- the RiftVM release packager verifies its output;
 - no asset exceeds GitHub's 2 GiB limit;
 - every local Release asset has a valid SHA-256; and
 - GitHub reports the same digest for every uploaded asset.

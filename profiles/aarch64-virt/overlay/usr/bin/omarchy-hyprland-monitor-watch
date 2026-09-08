@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # UWSM resolves Omarchy's monitor watcher from /usr/bin in this image. Start
-# EZVM's virtio-gpu display owner beside the preserved upstream recovery loop.
+# RiftVM's virtio-gpu display owner beside the preserved upstream recovery loop.
 
 set -u
 
-/usr/local/libexec/omarchy-ezvm-display-setup
-/usr/local/libexec/omarchy-ezvm-display-watch &
+/usr/local/libexec/omarchy-riftvm-display-setup
+/usr/local/libexec/omarchy-riftvm-display-watch &
 display_watch_pid=$!
 
 cleanup() {

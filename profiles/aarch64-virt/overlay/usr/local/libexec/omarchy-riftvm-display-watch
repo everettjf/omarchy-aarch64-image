@@ -7,11 +7,11 @@
 
 set -u
 
-readonly INSTANCE_LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-ezvm-display-watch.instance.lock"
-readonly DRM_ROOT="${OMARCHY_EZVM_DRM_ROOT:-/sys/class/drm}"
-readonly HYPRCTL="${OMARCHY_EZVM_HYPRCTL:-hyprctl}"
-readonly POLL_INTERVAL="${OMARCHY_EZVM_POLL_INTERVAL:-1}"
-readonly LOG_FILE="${OMARCHY_EZVM_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-ezvm-display-watch.log}"
+readonly INSTANCE_LOCK="${XDG_RUNTIME_DIR:-/tmp}/omarchy-riftvm-display-watch.instance.lock"
+readonly DRM_ROOT="${OMARCHY_RIFTVM_DRM_ROOT:-/sys/class/drm}"
+readonly HYPRCTL="${OMARCHY_RIFTVM_HYPRCTL:-hyprctl}"
+readonly POLL_INTERVAL="${OMARCHY_RIFTVM_POLL_INTERVAL:-1}"
+readonly LOG_FILE="${OMARCHY_RIFTVM_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-riftvm-display-watch.log}"
 
 log_debug() {
   # Keep the volatile per-session file for quick local inspection, but also
@@ -19,13 +19,13 @@ log_debug() {
   # persistent journal.  Display failures otherwise disappear at shutdown,
   # precisely when an offline image inspection is most useful.
   local line
-  printf -v line '%(%FT%T%z)T %s' -1 "$*"
+  line="$(date '+%FT%T%z') $*"
   printf '%s\n' "$line" | tee -a "$LOG_FILE"
 }
 
 discover_hyprland_instance() {
   local socket instance_dir
-  [[ -n ${OMARCHY_EZVM_HYPRCTL:-} ]] && return 0
+  [[ -n ${OMARCHY_RIFTVM_HYPRCTL:-} ]] && return 0
   [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && return 0
   for socket in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/hypr/*/.socket.sock; do
     [[ -S $socket ]] || continue
@@ -103,10 +103,20 @@ reconcile_current_mode() {
 install -d -m 0700 "$(dirname "$LOG_FILE")"
 touch "$LOG_FILE"
 log_debug "watcher starting: drm_root=$DRM_ROOT"
-exec 8>"$INSTANCE_LOCK"
-if ! flock -n 8; then
-  log_debug "another display watcher already owns $INSTANCE_LOCK; exiting"
-  exit 0
+if command -v flock >/dev/null 2>&1; then
+  exec 8>"$INSTANCE_LOCK"
+  if ! flock -n 8; then
+    log_debug "another display watcher already owns $INSTANCE_LOCK; exiting"
+    exit 0
+  fi
+else
+  fallback_lock="$INSTANCE_LOCK.d"
+  if ! mkdir "$fallback_lock" 2>/dev/null; then
+    log_debug "another display watcher already owns $INSTANCE_LOCK; exiting"
+    exit 0
+  fi
+  trap 'rmdir "$fallback_lock" 2>/dev/null || true' EXIT
+  trap 'exit 0' HUP INT TERM
 fi
 if ! uses_virtio_gpu; then
   log_debug "no virtio_gpu DRM device found; watcher exiting"

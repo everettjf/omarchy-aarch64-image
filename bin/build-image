@@ -28,7 +28,7 @@ ROOTFS_SIGNATURE=""
 ROOTFS_KEYRING=""
 ROOTFS_VERIFY_KEYRING=""
 NODE_TARBALL=""
-EZVM_GUEST_AGENT_BINARY=""
+RIFTVM_GUEST_AGENT_BINARY=""
 OMARCHY_REPOSITORY_MANIFEST=""
 OMARCHY_REPOSITORY_KEY=""
 OMARCHY_REPOSITORY_GENERATED_AT=""
@@ -83,7 +83,7 @@ Options:
   --rootfs-signature P   Detached signature for --rootfs
   --rootfs-keyring PATH  Arch Linux ARM GPG keyring
   --node-tarball PATH    Use a local linux-arm64 Node.js archive
-  --ezvm-guest-agent P   Statically linked EZVM linux-arm64 guest agent
+  --riftvm-guest-agent P   Statically linked RiftVM linux-arm64 guest agent
   --refresh              Refresh cached rolling downloads
   --force                Replace the exact requested output path(s)
   -h, --help             Show this help
@@ -184,9 +184,9 @@ parse_args() {
         NODE_TARBALL=$(absolute_path "$2")
         shift 2
         ;;
-      --ezvm-guest-agent)
-        (($# >= 2)) || fail "--ezvm-guest-agent requires a path"
-        EZVM_GUEST_AGENT_BINARY=$(absolute_path "$2")
+      --riftvm-guest-agent)
+        (($# >= 2)) || fail "--riftvm-guest-agent requires a path"
+        RIFTVM_GUEST_AGENT_BINARY=$(absolute_path "$2")
         shift 2
         ;;
       --refresh)
@@ -221,12 +221,12 @@ validate_configuration() {
     remove-package-patterns runtime-packages shell-defaults.jq; do
     [[ -f $PROFILE_DIR/$profile_file ]] || fail "profile is missing $profile_file: $IMAGE_PROFILE"
   done
-  [[ $IMAGE_FORMAT == raw ]] || fail "the EZVM profile only supports sparse raw images"
-  [[ -n $EZVM_GUEST_AGENT_BINARY && -f $EZVM_GUEST_AGENT_BINARY ]] ||
-    fail "--ezvm-guest-agent must name the statically linked linux-arm64 agent"
-  file "$EZVM_GUEST_AGENT_BINARY" |
+  [[ $IMAGE_FORMAT == raw ]] || fail "the RiftVM profile only supports sparse raw images"
+  [[ -n $RIFTVM_GUEST_AGENT_BINARY && -f $RIFTVM_GUEST_AGENT_BINARY ]] ||
+    fail "--riftvm-guest-agent must name the statically linked linux-arm64 agent"
+  file "$RIFTVM_GUEST_AGENT_BINARY" |
     grep -q 'ELF 64-bit.*ARM aarch64.*statically linked' ||
-    fail "EZVM guest agent must be a statically linked AArch64 ELF executable"
+    fail "RiftVM guest agent must be a statically linked AArch64 ELF executable"
 
   image_bytes=$(numfmt --from=iec "$IMAGE_SIZE") || fail "invalid image size: $IMAGE_SIZE"
   ((image_bytes >= 16 * 1024 * 1024 * 1024)) || fail "image size must be at least 16 GiB"
@@ -799,7 +799,8 @@ Server = $server
 EOF
 
   if ! grep -qxF "$include" "$pacman_conf"; then
-    sed -i "0,/^\[core\]/s||$include\n\n[core]|" "$pacman_conf"
+    INCLUDE_LINE="$include" perl -0pi.bak -e 's/^\[core\]/$ENV{INCLUDE_LINE}\n\n[core]/m' "$pacman_conf"
+    rm -f -- "$pacman_conf.bak"
   fi
 
   cat >"$hook" <<'EOF'
@@ -879,7 +880,8 @@ configure_base_system() {
   local locale_file="$MOUNT_DIR/etc/locale.gen"
 
   if grep -q '^#en_US.UTF-8 UTF-8' "$locale_file"; then
-    sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$locale_file"
+    sed -i.bak 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$locale_file"
+    rm -f -- "$locale_file.bak"
   elif ! grep -q '^en_US.UTF-8 UTF-8' "$locale_file"; then
     printf 'en_US.UTF-8 UTF-8\n' >>"$locale_file"
   fi
@@ -900,14 +902,14 @@ EOF
   # /usr. Since image assembly runs as root, copied overlay entries become
   # root-owned while the existing rootfs ownership remains intact.
   # UWSM's graphical application environment does not include /usr/local/bin
-  # in this image. Preserve the package implementation before the EZVM profile
+  # in this image. Preserve the package implementation before the RiftVM profile
   # overlays the exact /usr/bin autostart entry point.
   install -d -m755 "$MOUNT_DIR/usr/local/libexec"
   install -m755 "$MOUNT_DIR/usr/bin/omarchy-hyprland-monitor-watch" \
     "$MOUNT_DIR/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream"
   cp -a --no-preserve=ownership "$OVERLAY_DIR/." "$MOUNT_DIR/"
-  install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"
-  install -m755 "$EZVM_GUEST_AGENT_BINARY" "$MOUNT_DIR/usr/local/sbin/ezvm-agent"
+  install -d -m755 "$MOUNT_DIR/mnt/riftvm-shared"
+  install -m755 "$RIFTVM_GUEST_AGENT_BINARY" "$MOUNT_DIR/usr/local/sbin/rift-agent"
   apply_profile_shell_defaults
   chmod 755 "$MOUNT_DIR/usr/lib/omarchy-aarch64/grow-root"
   install -d -m755 "$MOUNT_DIR/etc/omarchy-aarch64"
@@ -917,14 +919,14 @@ EOF
   read_list "$CONFIG_DIR/omarchy-packages.aarch64" \
     >"$MOUNT_DIR/etc/omarchy-aarch64/managed-packages"
   target_chroot systemctl enable omarchy-aarch64-grow-root.service
-  target_chroot systemctl enable run-ezvm\\x2dagent\\x2dconfig.mount ezvm-agent.service
-  target_chroot systemctl enable 'mnt-ezvm\x2dshared.mount'
+  target_chroot systemctl enable run-rift\\x2dagent\\x2dconfig.mount rift-agent.service
+  target_chroot systemctl enable 'mnt-riftvm\x2dshared.mount'
   # This display path is independent of SPICE.  Enable dedicated user units
-  # globally so an EZVM virtio-gpu session does not inherit SPICE port or
+  # globally so an RiftVM virtio-gpu session does not inherit SPICE port or
   # WAYLAND_DISPLAY conditions from optional clipboard integration services.
   target_chroot systemctl --global enable \
-    omarchy-ezvm-display-setup.service omarchy-ezvm-display-watch.service
-  target_chroot systemctl --global enable ezvm-session-agent.service
+    omarchy-riftvm-display-setup.service omarchy-riftvm-display-watch.service
+  target_chroot systemctl --global enable rift-session-agent.service
 }
 
 mask_incompatible_target_services() {
@@ -1001,7 +1003,7 @@ stage_first_boot_provisioning() {
   # On a virtual framebuffer a VT geometry notification kills and restarts
   # that animation. ttfx then reuses the old DEC cursor canvas and can paint
   # the 81-column logo from a stale horizontal origin, clipping it even though
-  # virtio-gpu's scanout remains a valid 1280x720 surface. EZVM does not need a
+  # virtio-gpu's scanout remains a valid 1280x720 surface. RiftVM does not need a
   # continuously animated setup logo: the static renderer already watches the
   # console signature and recentres on every resize. Stop after that static
   # paint, which also removes needless setup-time CPU/GPU work.
@@ -1010,7 +1012,7 @@ stage_first_boot_provisioning() {
   ttfx_occurrences=$(grep -Fc 'ttfx -i "$LOGO_PATH"' "$owner")
   ((ttfx_occurrences == 1)) ||
     fail "expected one first-boot ttfx greeter invocation, found $ttfx_occurrences"
-  perl -0pi.bak -e 's{^(\s*)ttfx -i "\$LOGO_PATH"}{$1return 0 # EZVM: keep the first-boot greeter static and resize-safe.\n$1ttfx -i "\$LOGO_PATH"}m' "$owner"
+  perl -0pi.bak -e 's{^(\s*)ttfx -i "\$LOGO_PATH"}{$1return 0 # RiftVM: keep the first-boot greeter static and resize-safe.\n$1ttfx -i "\$LOGO_PATH"}m' "$owner"
   rm -f -- "$owner.bak"
 
   install -d -m755 "$provisioning/packages" "$wants"
@@ -1029,7 +1031,8 @@ configure_limine() {
   install -d -m755 "$MOUNT_DIR/etc/default"
   install -m644 "$MOUNT_DIR/usr/share/omarchy/default/limine/default.conf" \
     "$MOUNT_DIR/etc/default/limine"
-  sed -i "s|@@CMDLINE@@|$cmdline|" "$MOUNT_DIR/etc/default/limine"
+  sed -i.bak "s|@@CMDLINE@@|$cmdline|" "$MOUNT_DIR/etc/default/limine"
+  rm -f -- "$MOUNT_DIR/etc/default/limine.bak"
   install -m644 "$MOUNT_DIR/usr/share/omarchy/default/limine/limine.conf" \
     "$MOUNT_DIR/boot/limine.conf"
 
@@ -1049,7 +1052,7 @@ configure_limine() {
   fi
   [[ -f $MOUNT_DIR/boot/EFI/Linux/omarchy_linux.efi ]] ||
     fail "limine-update did not generate the Omarchy AArch64 UKI"
-  target_chroot /usr/local/sbin/omarchy-ezvm-ensure-bootable
+  target_chroot /usr/local/sbin/omarchy-riftvm-ensure-bootable
   target_chroot btrfs quota disable / >/dev/null 2>&1 ||
     warn "could not disable Btrfs quotas after the final Limine build"
 }
@@ -1112,10 +1115,10 @@ write_image_provenance() {
     printf 'rootfs_sha256=%s\n' "$(sha256sum "$ROOTFS_PATH" | awk '{print $1}')"
     printf 'node_archive=%s\n' "${NODE_TARBALL##*/}"
     printf 'node_sha256=%s\n' "$(sha256sum "$NODE_TARBALL" | awk '{print $1}')"
-    printf 'ezvm_guest_agent_source_url=%s\n' "$EZVM_GUEST_AGENT_URL"
-    printf 'ezvm_guest_agent_source_ref=%s\n' "$EZVM_GUEST_AGENT_REF"
-    printf 'ezvm_guest_agent_sha256=%s\n' \
-      "$(sha256sum "$EZVM_GUEST_AGENT_BINARY" | awk '{print $1}')"
+    printf 'riftvm_guest_agent_source_url=%s\n' "$RIFTVM_GUEST_AGENT_URL"
+    printf 'riftvm_guest_agent_source_ref=%s\n' "$RIFTVM_GUEST_AGENT_REF"
+    printf 'riftvm_guest_agent_sha256=%s\n' \
+      "$(sha256sum "$RIFTVM_GUEST_AGENT_BINARY" | awk '{print $1}')"
     printf 'omarchy_source=%s\n' "$OMARCHY_SOURCE_COMMIT"
     printf 'omarchy_source_url=%s\n' "$OMARCHY_AARCH64_URL"
     printf 'omarchy_source_ref=%s\n' "$OMARCHY_AARCH64_REF"
@@ -1162,8 +1165,8 @@ validate_target() {
     etc/limine-entry-tool.d/omarchy-uki.conf
     etc/mkinitcpio.conf.d/omarchy_hooks.conf
     etc/mkinitcpio.conf.d/zz-omarchy-aarch64-virt.conf
-    etc/modules-load.d/ezvm-agent.conf
-    etc/udev/rules.d/70-ezvm-input.rules
+    etc/modules-load.d/rift-agent.conf
+    etc/udev/rules.d/70-riftvm-input.rules
     etc/omarchy-aarch64/excluded-packages
     etc/omarchy-aarch64/profile
     etc/pacman.d/omarchy-aarch64.conf
@@ -1172,21 +1175,21 @@ validate_target() {
     etc/snapper/configs/root
     etc/systemd/system/multi-user.target.wants/limine-snapper-sync.service
     etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service
-    etc/systemd/system/multi-user.target.wants/ezvm-agent.service
-    'etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount'
-    etc/systemd/system/multi-user.target.wants/run-ezvm\\x2dagent\\x2dconfig.mount
-    'etc/systemd/system/mnt-ezvm\x2dshared.mount'
-    mnt/ezvm-shared
-    etc/systemd/user/ezvm-session-agent.service
-    etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service
+    etc/systemd/system/multi-user.target.wants/rift-agent.service
+    'etc/systemd/system/multi-user.target.wants/mnt-riftvm\x2dshared.mount'
+    etc/systemd/system/multi-user.target.wants/run-rift\\x2dagent\\x2dconfig.mount
+    'etc/systemd/system/mnt-riftvm\x2dshared.mount'
+    mnt/riftvm-shared
+    etc/systemd/user/rift-session-agent.service
+    etc/systemd/user/graphical-session.target.wants/rift-session-agent.service
     etc/systemd/system/systemd-oomd.service
     etc/systemd/system/systemd-oomd.socket
     usr/bin/omarchy-provision-owner
     usr/bin/limine-mkinitcpio
     usr/bin/limine-snapper-sync
-    usr/local/sbin/omarchy-ezvm-ensure-bootable
-    usr/local/sbin/ezvm-agent
-    usr/share/libalpm/hooks/zzzz-omarchy-ezvm-boot-fallback.hook
+    usr/local/sbin/omarchy-riftvm-ensure-bootable
+    usr/local/sbin/rift-agent
+    usr/share/libalpm/hooks/zzzz-omarchy-riftvm-boot-fallback.hook
     usr/share/omarchy-aarch64/repository-manifest.json
     usr/share/pacman/keyrings/omarchy-aarch64.gpg
     usr/share/omarchy/version

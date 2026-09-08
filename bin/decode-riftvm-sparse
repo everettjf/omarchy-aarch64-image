@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Fcntl qw(SEEK_SET);
 
-my $destination = shift @ARGV or die "usage: decode-ezvm-sparse OUTPUT_RAW\n";
+my $destination = shift @ARGV or die "usage: decode-riftvm-sparse OUTPUT_RAW\n";
 binmode STDIN;
 open my $output, '>', $destination or die "open $destination: $!\n";
 binmode $output;
@@ -23,7 +23,7 @@ sub read_line {
 }
 
 my $magic = read_line() // die "missing sparse stream header\n";
-$magic eq "EZVM-SPARSE-1\n" or die "invalid sparse stream header\n";
+$magic eq "RiftVM-SPARSE-1\n" or die "invalid sparse stream header\n";
 my $size_line = read_line() // die "missing sparse stream size\n";
 $size_line =~ /^([0-9]+)\n$/ or die "invalid sparse stream size\n";
 my $logical_size = $1;

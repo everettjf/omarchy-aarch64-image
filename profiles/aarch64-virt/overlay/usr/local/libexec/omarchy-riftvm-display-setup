@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Preserve SPICE clipboard transport while transferring virtual-display
-# ownership to EZVM's virtio-gpu device. omarchy-spice-guest-tools otherwise
+# ownership to RiftVM's virtio-gpu device. omarchy-spice-guest-tools otherwise
 # persists a VZ SPICE modeline in monitors.lua, which overrides DRM preferred
 # modes after a host window resize.
 
@@ -11,7 +11,16 @@ readonly CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 readonly STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 readonly MONITORS_FILE="$CONFIG_HOME/hypr/monitors.lua"
 readonly SPICE_CONFIG="$CONFIG_HOME/spice-guest-tools/config.toml"
-readonly SPICE_DEFAULT_CONFIG="${OMARCHY_EZVM_SPICE_DEFAULT_CONFIG:-/usr/share/spice-guest-tools/config/config.toml}"
+readonly SPICE_DEFAULT_CONFIG="${OMARCHY_RIFTVM_SPICE_DEFAULT_CONFIG:-/usr/share/spice-guest-tools/config/config.toml}"
+
+copy_mode() {
+  local source=$1 target=$2 mode
+  if chmod --reference="$source" "$target" 2>/dev/null; then
+    return 0
+  fi
+  mode=$(stat -f '%Lp' "$source")
+  chmod "$mode" "$target"
+}
 
 remove_spice_monitor_ownership() {
   [[ -f $MONITORS_FILE ]] || return 0
@@ -25,7 +34,7 @@ remove_spice_monitor_ownership() {
   if cmp -s "$temporary" "$MONITORS_FILE"; then
     rm -f "$temporary"
   else
-    chmod --reference="$MONITORS_FILE" "$temporary"
+    copy_mode "$MONITORS_FILE" "$temporary"
     mv -f "$temporary" "$MONITORS_FILE"
   fi
 }
@@ -54,7 +63,7 @@ disable_spice_display_bridge() {
       if (!found) print "\n[display]\nenabled = false"
     }
   ' "$SPICE_CONFIG" >"$temporary"
-  chmod --reference="$SPICE_CONFIG" "$temporary"
+  copy_mode "$SPICE_CONFIG" "$temporary"
   mv -f "$temporary" "$SPICE_CONFIG"
 }
 

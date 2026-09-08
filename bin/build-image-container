@@ -49,12 +49,12 @@ while (($#)); do
       CONTAINER_ARGS+=(--omarchy-repository /omarchy-repository)
       shift 2
       ;;
-    --ezvm-guest-agent)
-      (($# >= 2)) || fail "--ezvm-guest-agent requires a path"
-      [[ -z $AGENT_MOUNT ]] || fail "--ezvm-guest-agent may only be specified once"
-      AGENT_MOUNT=$(resolve_existing_path "$2") || fail "EZVM guest agent not found: $2"
-      [[ -f $AGENT_MOUNT ]] || fail "EZVM guest agent is not a file: $2"
-      CONTAINER_ARGS+=(--ezvm-guest-agent /ezvm-agent)
+    --riftvm-guest-agent)
+      (($# >= 2)) || fail "--riftvm-guest-agent requires a path"
+      [[ -z $AGENT_MOUNT ]] || fail "--riftvm-guest-agent may only be specified once"
+      AGENT_MOUNT=$(resolve_existing_path "$2") || fail "RiftVM guest agent not found: $2"
+      [[ -f $AGENT_MOUNT ]] || fail "RiftVM guest agent is not a file: $2"
+      CONTAINER_ARGS+=(--riftvm-guest-agent /rift-agent)
       shift 2
       ;;
     *)
@@ -75,7 +75,7 @@ if [[ -n $REPOSITORY_MOUNT ]]; then
   DOCKER_ARGS+=(--mount "type=bind,source=$REPOSITORY_MOUNT,target=/omarchy-repository,readonly")
 fi
 if [[ -n $AGENT_MOUNT ]]; then
-  DOCKER_ARGS+=(--mount "type=bind,source=$AGENT_MOUNT,target=/ezvm-agent,readonly")
+  DOCKER_ARGS+=(--mount "type=bind,source=$AGENT_MOUNT,target=/rift-agent,readonly")
 fi
 
 exec docker "${DOCKER_ARGS[@]}" \

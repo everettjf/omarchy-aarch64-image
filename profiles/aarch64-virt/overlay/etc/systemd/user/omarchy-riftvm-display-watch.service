@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch RiftVM virtio-gpu display modes
+Requires=omarchy-riftvm-display-setup.service
+After=graphical-session.target omarchy-riftvm-display-setup.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PATH=/usr/local/bin:/usr/bin:%h/.local/bin
+ExecStart=/usr/local/libexec/omarchy-riftvm-display-watch
+Restart=on-failure
+RestartSec=1
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target

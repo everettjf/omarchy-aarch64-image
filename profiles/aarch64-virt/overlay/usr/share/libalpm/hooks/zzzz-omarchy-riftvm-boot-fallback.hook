@@ -8,6 +8,6 @@ Target = limine-mkinitcpio-hook
 Target = omarchy
 
 [Action]
-Description = Refreshing the EZVM emergency boot fallback...
+Description = Refreshing the RiftVM emergency boot fallback...
 When = PostTransaction
-Exec = /usr/local/sbin/omarchy-ezvm-ensure-bootable
+Exec = /usr/local/sbin/omarchy-riftvm-ensure-bootable

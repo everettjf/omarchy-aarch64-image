@@ -1,11 +1,11 @@
 [Unit]
-Description=EZVM Omarchy shared folder
+Description=RiftVM Omarchy shared folder
 After=local-fs-pre.target
 Before=multi-user.target
 
 [Mount]
-What=ezvm_shared
-Where=/mnt/ezvm-shared
+What=riftvm_shared
+Where=/mnt/riftvm-shared
 Type=virtiofs
 Options=rw,nosuid,nodev
 

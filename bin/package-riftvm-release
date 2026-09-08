@@ -3,12 +3,12 @@
 set -euo pipefail
 
 PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-ezvm.raw"
+IMAGE_PATH="$PROJECT_ROOT/build/omarchy-aarch64-riftvm.raw"
 OUTPUT_DIR="$PROJECT_ROOT/build/release-assets"
 THUMBNAIL_PATH="$PROJECT_ROOT/assets/omarchy-thumbnail.png"
 RELEASE_TAG=""
-PART_SIZE_MIB=${OMARCHY_EZVM_PART_SIZE_MIB:-1900}
-RELEASE_REPOSITORY=${OMARCHY_EZVM_RELEASE_REPOSITORY:-everettjf/omarchy-aarch64-image}
+PART_SIZE_MIB=${OMARCHY_RIFTVM_PART_SIZE_MIB:-1900}
+RELEASE_REPOSITORY=${OMARCHY_RIFTVM_RELEASE_REPOSITORY:-everettjf/omarchy-aarch64-image}
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 absolute_existing_path() { (cd -- "$(dirname -- "$1")" && printf '%s/%s\n' "$PWD" "$(basename -- "$1")"); }
@@ -42,9 +42,9 @@ for command in awk cat dirname find gzip install jq mkdir python3 sed sha256sum 
 done
 
 mkdir -p "$OUTPUT_DIR"
-prefix="$OUTPUT_DIR/Omarchy-ezvm.sparse.gz.part-"
-rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-ezvm.command" \
-  "$OUTPUT_DIR/ezvm-release-manifest.json" "$OUTPUT_DIR/Omarchy-thumbnail.png" \
+prefix="$OUTPUT_DIR/Omarchy-riftvm.sparse.gz.part-"
+rm -f -- "$prefix"* "$OUTPUT_DIR/install-Omarchy-riftvm.command" \
+  "$OUTPUT_DIR/riftvm-release-manifest.json" "$OUTPUT_DIR/Omarchy-thumbnail.png" \
   "$OUTPUT_DIR/image-provenance.txt" "$OUTPUT_DIR"/*.all-packages.txt \
   "$OUTPUT_DIR"/*.explicit-packages.txt "$OUTPUT_DIR"/*.orphans.txt \
   "$OUTPUT_DIR"/*.packages.tsv "$OUTPUT_DIR"/*.raw.sha256
@@ -64,14 +64,14 @@ provenance=${IMAGE_PATH%/*}/image-provenance.txt
 thumbnail_sha=$(sha256sum "$OUTPUT_DIR/Omarchy-thumbnail.png" | awk '{print $1}')
 thumbnail_size=$(file_size "$OUTPUT_DIR/Omarchy-thumbnail.png")
 
-printf 'Encoding the EZVM sparse stream, compressing, and splitting…\n'
-"$PROJECT_ROOT/bin/encode-ezvm-sparse" "$IMAGE_PATH" |
+printf 'Encoding the RiftVM sparse stream, compressing, and splitting…\n'
+"$PROJECT_ROOT/bin/encode-riftvm-sparse" "$IMAGE_PATH" |
   gzip -1 -n |
   split -d -a 2 -b "${PART_SIZE_MIB}m" - "$prefix"
 
 parts=()
 while IFS= read -r part; do parts+=("$part"); done < <(
-  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-ezvm.sparse.gz.part-*' -print | sort
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Omarchy-riftvm.sparse.gz.part-*' -print | sort
 )
 ((${#parts[@]} > 0)) || fail "compression produced no parts"
 image_sha=$(sha256sum "$IMAGE_PATH" | awk '{print $1}')
@@ -98,9 +98,9 @@ jq -n \
   --argjson parts "$parts_json" '
   {
     schemaVersion: 1,
-    kind: "io.github.everettjf.ezvm.preinstalled-image",
+    kind: "io.github.everettjf.riftvm.preinstalled-image",
     architecture: "arm64",
-    minimumEZVMVersion: "1.0.0",
+    minimumRiftVMVersion: "1.0.0",
     product: {id: "org.omarchy.aarch64", name: "Omarchy", version: $tag},
     disk: {
       format: "raw",
@@ -108,7 +108,7 @@ jq -n \
       sha256: $image_sha256
     },
     archive: {
-      compression: "ezvm-sparse-stream+gzip",
+      compression: "riftvm-sparse-stream+gzip",
       compressedSize: $archive_size,
       sha256: $archive_sha256,
       parts: $parts
@@ -124,9 +124,9 @@ jq -n \
       name: "Omarchy",
       remark: "Omarchy AArch64 preinstalled image"
     }
-  }' >"$OUTPUT_DIR/ezvm-release-manifest.json"
+  }' >"$OUTPUT_DIR/riftvm-release-manifest.json"
 
-installer="$OUTPUT_DIR/install-Omarchy-ezvm.command"
+installer="$OUTPUT_DIR/install-Omarchy-riftvm.command"
 {
   cat <<'HEADER'
 #!/bin/bash
@@ -138,25 +138,25 @@ done
 HEADER
   printf "repository='%s'\ntag='%s'\n" "$RELEASE_REPOSITORY" "$RELEASE_TAG"
   cat <<'BODY_START'
-destination=${1:-"$HOME/EZVM Virtual Machines/Omarchy.ezvm"}
-[[ $destination == *.ezvm ]] || fail "destination must end in .ezvm"
+destination=${1:-"$HOME/RiftVM Virtual Machines/Omarchy.riftvm"}
+[[ $destination == *.riftvm ]] || fail "destination must end in .riftvm"
 [[ ! -e $destination ]] || fail "destination already exists: $destination"
-ezvm_bin=${EZVM_CLI_EXECUTABLE:-$(command -v ezvm || true)}
-[[ -n $ezvm_bin && -x $ezvm_bin ]] || fail "EZVM 1.0.0 or newer must be installed with Homebrew"
-work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-ezvm-install.XXXXXX")
+riftvm_bin=${RIFTVM_CLI_EXECUTABLE:-$(command -v riftvm || true)}
+[[ -n $riftvm_bin && -x $riftvm_bin ]] || fail "RiftVM 1.0.0 or newer must be installed with Homebrew"
+work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-riftvm-install.XXXXXX")
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
-base_url=${OMARCHY_EZVM_RELEASE_BASE_URL:-"https://github.com/$repository/releases/download/$tag"}
-manifest="$work/ezvm-release-manifest.json"
-curl --fail --location --retry 3 --output "$manifest" "$base_url/ezvm-release-manifest.json"
+base_url=${OMARCHY_RIFTVM_RELEASE_BASE_URL:-"https://github.com/$repository/releases/download/$tag"}
+manifest="$work/riftvm-release-manifest.json"
+curl --fail --location --retry 3 --output "$manifest" "$base_url/riftvm-release-manifest.json"
 jq -e '
   .schemaVersion == 1 and
-  .kind == "io.github.everettjf.ezvm.preinstalled-image" and
+  .kind == "io.github.everettjf.riftvm.preinstalled-image" and
   .architecture == "arm64" and
   .disk.format == "raw" and
   (.disk.virtualSize | type == "number") and
   (.disk.sha256 | test("^[0-9a-f]{64}$")) and
-  .archive.compression == "ezvm-sparse-stream+gzip" and
+  .archive.compression == "riftvm-sparse-stream+gzip" and
   (.archive.sha256 | test("^[0-9a-f]{64}$")) and
   (.archive.parts | type == "array" and length > 0) and
   all(.archive.parts[]; (.name | test("^[A-Za-z0-9._-]+$")) and (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$"))) and
@@ -165,7 +165,7 @@ jq -e '
   (.thumbnail.size | type == "number") and
   (.thumbnail.sha256 | test("^[0-9a-f]{64}$"))
 ' "$manifest" >/dev/null || fail "release manifest is invalid or unsupported"
-image_name='Omarchy-ezvm.raw'
+image_name='Omarchy-riftvm.raw'
 image_sha=$(jq -r '.disk.sha256' "$manifest")
 image_size=$(jq -r '.disk.virtualSize' "$manifest")
 archive_sha=$(jq -r '.archive.sha256' "$manifest")
@@ -176,12 +176,12 @@ thumbnail="$work/$thumbnail_name"
 curl --fail --location --retry 3 --output "$thumbnail" "$base_url/$thumbnail_name"
 [[ $(stat -f %z "$thumbnail") == "$thumbnail_size" ]] || fail "thumbnail size mismatch"
 [[ $(shasum -a 256 "$thumbnail" | awk '{print $1}') == "$thumbnail_sha" ]] || fail "thumbnail checksum mismatch"
-decoder="$work/decode-ezvm-sparse"
-cat >"$decoder" <<'EZVM_SPARSE_DECODER'
+decoder="$work/decode-riftvm-sparse"
+cat >"$decoder" <<'RIFTVM_SPARSE_DECODER'
 BODY_START
-  cat "$PROJECT_ROOT/bin/decode-ezvm-sparse"
+  cat "$PROJECT_ROOT/bin/decode-riftvm-sparse"
   cat <<'BODY'
-EZVM_SPARSE_DECODER
+RIFTVM_SPARSE_DECODER
 downloaded=()
 part_count=$(jq '.archive.parts | length' "$manifest")
 for ((index = 0; index < part_count; index++)); do
@@ -210,10 +210,10 @@ printf 'Verifying the reconstructed 64 GiB disk… This can take a few minutes.\
 actual=$(shasum -a 256 "$raw" | awk '{print $1}')
 [[ $actual == "$image_sha" ]] || fail "raw image checksum mismatch"
 mkdir -p "$(dirname "$destination")"
-printf 'Importing Omarchy into EZVM…\n'
-"$ezvm_bin" install-image "$manifest" --image "$raw" --thumbnail "$thumbnail" --destination "$destination" --timeout 300
-if [[ ${OMARCHY_EZVM_SKIP_OPEN:-0} != 1 ]]; then open -a EZVM; fi
-printf '\nInstalled Omarchy for EZVM: %s\n' "$destination"
+printf 'Importing Omarchy into RiftVM…\n'
+"$riftvm_bin" install-image "$manifest" --image "$raw" --thumbnail "$thumbnail" --destination "$destination" --timeout 300
+if [[ ${OMARCHY_RIFTVM_SKIP_OPEN:-0} != 1 ]]; then open -a RiftVM; fi
+printf '\nInstalled Omarchy for RiftVM: %s\n' "$destination"
 BODY
 } >"$installer"
 chmod 0755 "$installer"
@@ -227,4 +227,4 @@ rm -f "$OUTPUT_DIR/SHA256SUMS"
   )
   sha256sum "${files[@]}" >SHA256SUMS
 )
-printf 'Prepared %d EZVM image part(s) in %s\n' "${#parts[@]}" "$OUTPUT_DIR"
+printf 'Prepared %d RiftVM image part(s) in %s\n' "${#parts[@]}" "$OUTPUT_DIR"

@@ -1,4 +1,4 @@
-name: Publish AArch64 EZVM image
+name: Publish AArch64 RiftVM image
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag to create (for example v4.0.1-ezvm.11)
+        description: Release tag to create (for example v4.0.1-riftvm.11)
         required: true
         type: string
       publish_release:
@@ -45,8 +45,8 @@ jobs:
           echo "omarchy_ref=$OMARCHY_AARCH64_REF" >> "$GITHUB_OUTPUT"
           echo "packages_url=$OMARCHY_PKGS_AARCH64_URL" >> "$GITHUB_OUTPUT"
           echo "packages_ref=$OMARCHY_PKGS_AARCH64_REF" >> "$GITHUB_OUTPUT"
-          echo "ezvm_agent_url=$EZVM_GUEST_AGENT_URL" >> "$GITHUB_OUTPUT"
-          echo "ezvm_agent_ref=$EZVM_GUEST_AGENT_REF" >> "$GITHUB_OUTPUT"
+          echo "riftvm_agent_url=$RIFTVM_GUEST_AGENT_URL" >> "$GITHUB_OUTPUT"
+          echo "riftvm_agent_ref=$RIFTVM_GUEST_AGENT_REF" >> "$GITHUB_OUTPUT"
           echo "cache_week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout pinned Omarchy source
@@ -65,27 +65,27 @@ jobs:
           path: build/dependencies/omarchy-pkgs-aarch64
           persist-credentials: false
 
-      - name: Checkout pinned EZVM guest-agent source
+      - name: Checkout pinned RiftVM guest-agent source
         uses: actions/checkout@v7
         with:
-          repository: everettjf/ezvm
-          ref: ${{ steps.sources.outputs.ezvm_agent_ref }}
-          path: build/dependencies/ezvm
+          repository: everettjf/riftvm
+          ref: ${{ steps.sources.outputs.riftvm_agent_ref }}
+          path: build/dependencies/riftvm
           persist-credentials: false
 
-      - name: Build pinned EZVM guest agent
+      - name: Build pinned RiftVM guest agent
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/dependencies/ezvm-agent
+          mkdir -p build/dependencies/rift-agent
           (
-            cd build/dependencies/ezvm/GuestAgent/linux
+            cd build/dependencies/riftvm/GuestAgent/linux
             go test ./...
             GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
-              -trimpath -ldflags "-s -w -X main.version=${{ steps.sources.outputs.ezvm_agent_ref }}" \
-              -o ../../../ezvm-agent/ezvm-agent .
+              -trimpath -ldflags "-s -w -X main.version=${{ steps.sources.outputs.riftvm_agent_ref }}" \
+              -o ../../../rift-agent/rift-agent .
           )
-          file build/dependencies/ezvm-agent/ezvm-agent |
+          file build/dependencies/rift-agent/rift-agent |
             grep -q 'ELF 64-bit.*ARM aarch64.*statically linked'
 
       - name: Restore verified rolling inputs
@@ -141,9 +141,9 @@ jobs:
           set -euo pipefail
           ./bin/build-image-container \
             --omarchy-source build/dependencies/omarchy-aarch64 \
-            --ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent \
+            --riftvm-guest-agent build/dependencies/rift-agent/rift-agent \
             --force
-          (cd build && sha256sum --check omarchy-aarch64-ezvm.raw.sha256)
+          (cd build && sha256sum --check omarchy-aarch64-riftvm.raw.sha256)
           df -h /
 
       # Save before packaging/upload so a later Release API failure does not
@@ -177,10 +177,10 @@ jobs:
           [[ $tag =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Package split EZVM release assets
+      - name: Package split RiftVM release assets
         run: |
           set -euo pipefail
-          ./bin/package-ezvm-release \
+          ./bin/package-riftvm-release \
             --tag '${{ steps.release.outputs.tag }}' \
             --output build/release-assets
           find build/release-assets -maxdepth 1 -type f -size +2047M -print -quit |
@@ -206,7 +206,7 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --draft \
             --target "$GITHUB_SHA" \
-            --title "Omarchy AArch64 VM for EZVM $RELEASE_TAG" \
+            --title "Omarchy AArch64 VM for RiftVM $RELEASE_TAG" \
             --notes-file RELEASE_NOTES.md \
             "${assets[@]}"
 

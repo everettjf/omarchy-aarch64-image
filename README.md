@@ -1,12 +1,12 @@
-# Omarchy AArch64 Image for EZVM
+# Omarchy AArch64 Image for RiftVM
 
 This project builds and publishes a sparse AArch64 Omarchy disk image exclusively
-for [EZVM](https://github.com/everettjf/ezvm) and Apple's
+for [RiftVM](https://github.com/everettjf/riftvm) and Apple's
 Virtualization.framework. It does not publish a general-purpose disk image or a
 bundle for another virtual-machine frontend.
 
 The image runs natively on Apple silicon: the guest CPU architecture is ARM64,
-so EZVM virtualizes it without cross-architecture CPU emulation.
+so RiftVM virtualizes it without cross-architecture CPU emulation.
 
 ## Release pipeline
 
@@ -16,7 +16,7 @@ This repository is one part of a three-repository AArch64 release pipeline:
   maintains the AArch64 runtime adaptation of Omarchy.
 - [`riverscn/omarchy-pkgs-aarch64`](https://github.com/riverscn/omarchy-pkgs-aarch64)
   builds and publishes the signed stable AArch64 pacman repository.
-- This repository assembles the EZVM disk image from Arch Linux ARM and that
+- This repository assembles the RiftVM disk image from Arch Linux ARM and that
   signed repository.
 
 The builder downloads the latest package Release manifest and public key on
@@ -37,7 +37,7 @@ sudo pacman -Syu
 
 ## Image contents
 
-The EZVM image contains:
+The RiftVM image contains:
 
 - Arch Linux ARM's generic AArch64 root filesystem and kernel;
 - a 1 GiB EFI System Partition and Btrfs root with `@`, `@home`, `@log`,
@@ -52,10 +52,10 @@ The EZVM image contains:
   identity, hostname, and timezone;
 - an idempotent service that expands the root partition and Btrfs filesystem
   when the virtual disk grows; and
-- a built-in Omarchy thumbnail for the EZVM library.
+- a built-in Omarchy thumbnail for the RiftVM library.
 
 The profile intentionally excludes host-specific physical hardware services and
-guest components that are unavailable through EZVM.
+guest components that are unavailable through RiftVM.
 
 The distributed image is intentionally unencrypted. A reusable image cannot
 safely contain a shared disk-encryption key; per-machine encryption requires a
@@ -70,41 +70,41 @@ Requirements:
 - Homebrew; and
 - at least 15 GiB available on the destination volume.
 
-The recommended command installs or updates EZVM, verifies the published
+The recommended command installs or updates RiftVM, verifies the published
 Omarchy installer, downloads and verifies every image part, and imports a new
 machine:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/ezvm/main/scripts/install-omarchy.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/everettjf/riftvm/main/scripts/install-omarchy.sh)"
 ```
 
-If EZVM 1.0.0 or newer is already installed, the image-only installer is:
+If RiftVM 1.0.0 or newer is already installed, the image-only installer is:
 
 ```bash
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-ezvm.command | /bin/bash'
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/everettjf/omarchy-aarch64-image/releases/latest/download/install-Omarchy-riftvm.command | /bin/bash'
 ```
 
-The installer treats `ezvm-release-manifest.json` as its sole metadata source.
+The installer treats `riftvm-release-manifest.json` as its sole metadata source.
 It verifies:
 
 - every numbered part's byte length and SHA-256;
 - the complete compressed stream SHA-256;
 - the decoded raw disk's virtual size and SHA-256;
 - the thumbnail's byte length and SHA-256; and
-- the minimum supported EZVM version.
+- the minimum supported RiftVM version.
 
 The portable sparse stream records only allocated extents and recreates them at
 their exact disk offsets on macOS. The logical disk is 64 GiB while physical
-host usage stays close to the guest's used data. EZVM creates fresh machine,
+host usage stays close to the guest's used data. RiftVM creates fresh machine,
 NVRAM, and host configuration identities during import.
 
 ## Release assets
 
-Each Release contains only the EZVM installation path:
+Each Release contains only the RiftVM installation path:
 
-- `install-Omarchy-ezvm.command`;
-- `ezvm-release-manifest.json`;
-- numbered `Omarchy-ezvm.sparse.gz.part-*` files;
+- `install-Omarchy-riftvm.command`;
+- `riftvm-release-manifest.json`;
+- numbered `Omarchy-riftvm.sparse.gz.part-*` files;
 - `Omarchy-thumbnail.png`;
 - `SHA256SUMS`;
 - image provenance; and
@@ -141,19 +141,19 @@ Useful options:
 The default output is:
 
 ```text
-build/omarchy-aarch64-ezvm.raw
-build/omarchy-aarch64-ezvm.raw.sha256
+build/omarchy-aarch64-riftvm.raw
+build/omarchy-aarch64-riftvm.raw.sha256
 ```
 
 A successful build also emits package inventories and
-`build/image-provenance.txt`, including the pinned EZVM Guest Agent source
+`build/image-provenance.txt`, including the pinned RiftVM Guest Agent source
 revision and the digest of the exact binary installed into the image.
 
-Package a local EZVM Release layout:
+Package a local RiftVM Release layout:
 
 ```bash
-./bin/package-ezvm-release \
-  --tag v4.0.1-ezvm.1 \
+./bin/package-riftvm-release \
+  --tag v4.0.1-riftvm.1 \
   --output build/release-assets
 ```
 
@@ -167,12 +167,12 @@ OMARCHY_TEST_SOURCE=../omarchy-aarch64 ./tests/run
 ```
 
 The suite verifies script syntax, package boundaries, signed repository
-provenance, boot configuration, sparse output invariants, EZVM manifest and
+provenance, boot configuration, sparse output invariants, RiftVM manifest and
 installer behavior, split-part checksums, workflow constraints, and the absence
 of removed runtime integrations.
 
 A complete release additionally requires a native AArch64 image build, checksum
-verification, EZVM import, boot, first-run provisioning, shutdown, restart, and
+verification, RiftVM import, boot, first-run provisioning, shutdown, restart, and
 forced-stop recovery testing.
 
 See [`docs/RELEASE_VALIDATION.md`](docs/RELEASE_VALIDATION.md) for the complete

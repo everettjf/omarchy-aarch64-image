@@ -1,0 +1,20 @@
+[Unit]
+Description=RiftVM Guest Agent
+Requires=run-rift\x2dagent\x2dconfig.mount
+After=run-rift\x2dagent\x2dconfig.mount systemd-modules-load.service
+Before=omarchy-provision-owner.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rift-agent --config /run/rift-agent-config/config.json
+Restart=always
+RestartSec=1
+User=root
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run /mnt/riftvm-shared
+
+[Install]
+WantedBy=multi-user.target

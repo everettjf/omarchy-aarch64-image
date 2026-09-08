@@ -17,5 +17,5 @@ hl.config({
 -- reconciliation so window and full-screen resizing also work while locked.
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
 hl.on("hyprland.start", function()
-  hl.exec_cmd("/usr/local/libexec/omarchy-ezvm-display-watch")
+  hl.exec_cmd("/usr/local/libexec/omarchy-riftvm-display-watch")
 end)

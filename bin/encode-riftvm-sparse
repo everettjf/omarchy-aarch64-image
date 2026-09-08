@@ -12,7 +12,7 @@ def fail(message: str) -> None:
 
 
 if len(sys.argv) != 2:
-    fail("usage: encode-ezvm-sparse RAW_IMAGE")
+    fail("usage: encode-riftvm-sparse RAW_IMAGE")
 
 path = pathlib.Path(sys.argv[1])
 if not path.is_file():
@@ -21,7 +21,7 @@ if not path.is_file():
 output = sys.stdout.buffer
 with path.open("rb", buffering=0) as source:
     size = os.fstat(source.fileno()).st_size
-    output.write(b"EZVM-SPARSE-1\n")
+    output.write(b"RiftVM-SPARSE-1\n")
     output.write(f"{size}\n".encode("ascii"))
     position = 0
     while position < size:

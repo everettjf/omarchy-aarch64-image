@@ -1,0 +1,12 @@
+[Unit]
+Description=RiftVM guest-agent enrollment
+Before=rift-agent.service
+
+[Mount]
+What=rift-agent
+Where=/run/rift-agent-config
+Type=virtiofs
+Options=ro,nodev,nosuid,noexec
+
+[Install]
+WantedBy=multi-user.target

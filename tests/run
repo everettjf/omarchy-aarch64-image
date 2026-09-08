@@ -71,7 +71,7 @@ pass "all project and modified runtime scripts parse as Bash"
     fail "staged first-boot form does not use the local timezone database twice"
   bash -n "$setup_form"
   owner="$MOUNT_DIR/usr/bin/omarchy-provision-owner"
-  [[ $(grep -Fc 'EZVM: keep the first-boot greeter static and resize-safe' "$owner") == 1 ]] ||
+  [[ $(grep -Fc 'RiftVM: keep the first-boot greeter static and resize-safe' "$owner") == 1 ]] ||
     fail "staged first-boot greeter still runs its resize-unsafe animation"
   bash -n "$owner"
   pass "first-boot form is bus-independent and its greeter is resize-safe"
@@ -82,73 +82,73 @@ pass "all project and modified runtime scripts parse as Bash"
   fixture=$(mktemp -d)
   trap 'rm -rf "$fixture"' EXIT
   head -c 2560000 /dev/urandom >"$fixture/test.raw"
-  OMARCHY_EZVM_PART_SIZE_MIB=1 "$ROOT/bin/package-ezvm-release" \
+  OMARCHY_RIFTVM_PART_SIZE_MIB=1 "$ROOT/bin/package-riftvm-release" \
     --tag v4.0.1-test.1 \
     --image "$fixture/test.raw" \
     --output "$fixture/release" >/dev/null
-  first_archive_sha=$(jq -r '.archive.sha256' "$fixture/release/ezvm-release-manifest.json")
-  OMARCHY_EZVM_PART_SIZE_MIB=1 "$ROOT/bin/package-ezvm-release" \
+  first_archive_sha=$(jq -r '.archive.sha256' "$fixture/release/riftvm-release-manifest.json")
+  OMARCHY_RIFTVM_PART_SIZE_MIB=1 "$ROOT/bin/package-riftvm-release" \
     --tag v4.0.1-test.1 \
     --image "$fixture/test.raw" \
     --output "$fixture/release" >/dev/null
-  [[ $(jq -r '.archive.sha256' "$fixture/release/ezvm-release-manifest.json") == \
-    "$first_archive_sha" ]] || fail "EZVM release compression is not reproducible"
+  [[ $(jq -r '.archive.sha256' "$fixture/release/riftvm-release-manifest.json") == \
+    "$first_archive_sha" ]] || fail "RiftVM release compression is not reproducible"
   (cd "$fixture/release" && sha256sum --check SHA256SUMS >/dev/null) ||
-    fail "EZVM release asset checksums are invalid"
-  bash -n "$fixture/release/install-Omarchy-ezvm.command"
-  [[ -x $fixture/release/install-Omarchy-ezvm.command ]] ||
-    fail "macOS EZVM installer is not executable"
+    fail "RiftVM release asset checksums are invalid"
+  bash -n "$fixture/release/install-Omarchy-riftvm.command"
+  [[ -x $fixture/release/install-Omarchy-riftvm.command ]] ||
+    fail "macOS RiftVM installer is not executable"
   mapfile -t parts < <(find "$fixture/release" -maxdepth 1 -type f \
-    -name 'Omarchy-ezvm.sparse.gz.part-*' -print | sort)
-  ((${#parts[@]} >= 2)) || fail "EZVM release packager did not split a multi-part fixture"
-  cat -- "${parts[@]}" | gzip -dc | perl "$ROOT/bin/decode-ezvm-sparse" \
+    -name 'Omarchy-riftvm.sparse.gz.part-*' -print | sort)
+  ((${#parts[@]} >= 2)) || fail "RiftVM release packager did not split a multi-part fixture"
+  cat -- "${parts[@]}" | gzip -dc | perl "$ROOT/bin/decode-riftvm-sparse" \
     "$fixture/reconstructed.raw"
   cmp "$fixture/test.raw" "$fixture/reconstructed.raw" ||
-    fail "EZVM sparse stream does not reconstruct the source disk byte-for-byte"
+    fail "RiftVM sparse stream does not reconstruct the source disk byte-for-byte"
   jq -e '
     .schemaVersion == 1 and
-    .kind == "io.github.everettjf.ezvm.preinstalled-image" and
+    .kind == "io.github.everettjf.riftvm.preinstalled-image" and
     .product.id == "org.omarchy.aarch64" and
     .product.version == "v4.0.1-test.1" and
     .architecture == "arm64" and
-    .minimumEZVMVersion == "1.0.0" and
+    .minimumRiftVMVersion == "1.0.0" and
     .disk.format == "raw" and
     (.disk.virtualSize | type == "number") and
     (.disk.sha256 | test("^[0-9a-f]{64}$")) and
-    .archive.compression == "ezvm-sparse-stream+gzip" and
+    .archive.compression == "riftvm-sparse-stream+gzip" and
     (.archive.parts | length) > 0 and
     .thumbnail.name == "Omarchy-thumbnail.png" and
     .thumbnail.mediaType == "image/png" and
     (.thumbnail.size | type == "number" and . > 0) and
     (.thumbnail.sha256 | test("^[0-9a-f]{64}$")) and
     .virtualMachine.name == "Omarchy"
-  ' "$fixture/release/ezvm-release-manifest.json" >/dev/null ||
-    fail "EZVM release manifest is invalid"
-  grep -q 'decode-ezvm-sparse' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not embed the sparse stream decoder"
-  grep -Fq 'install-image "$manifest"' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not use the public install-image command"
-  grep -Fq 'Verifying the complete compressed image' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not explain the complete archive verification stage"
-  grep -Fq 'Reconstructing the 64 GiB sparse disk' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not explain the sparse reconstruction stage"
-  grep -Fq 'Verifying the reconstructed 64 GiB disk' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not explain the raw disk verification stage"
-  grep -Fq 'Importing Omarchy into EZVM' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not explain the EZVM import stage"
-  grep -Fq -- '--thumbnail "$thumbnail"' "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer does not install the bundled thumbnail"
+  ' "$fixture/release/riftvm-release-manifest.json" >/dev/null ||
+    fail "RiftVM release manifest is invalid"
+  grep -q 'decode-riftvm-sparse' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not embed the sparse stream decoder"
+  grep -Fq 'install-image "$manifest"' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not use the public install-image command"
+  grep -Fq 'Verifying the complete compressed image' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not explain the complete archive verification stage"
+  grep -Fq 'Reconstructing the 64 GiB sparse disk' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not explain the sparse reconstruction stage"
+  grep -Fq 'Verifying the reconstructed 64 GiB disk' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not explain the raw disk verification stage"
+  grep -Fq 'Importing Omarchy into RiftVM' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not explain the RiftVM import stage"
+  grep -Fq -- '--thumbnail "$thumbnail"' "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer does not install the bundled thumbnail"
   [[ -s $fixture/release/Omarchy-thumbnail.png ]] ||
-    fail "EZVM release does not include the Omarchy thumbnail"
+    fail "RiftVM release does not include the Omarchy thumbnail"
   if find "$fixture/release" -maxdepth 1 -type f -empty -print -quit | grep -q .; then
-    fail "EZVM release contains a zero-byte asset rejected by GitHub"
+    fail "RiftVM release contains a zero-byte asset rejected by GitHub"
   fi
   if find "$fixture/release" -maxdepth 1 -type f -print | grep -E -i 'utm|qcow2'; then
-    fail "EZVM release packager emitted a removed UTM/QCOW2 asset"
+    fail "RiftVM release packager emitted a removed UTM/QCOW2 asset"
   fi
-  ! grep -Fq "image_sha='" "$fixture/release/install-Omarchy-ezvm.command" ||
-    fail "EZVM installer still embeds a second copy of manifest checksums"
-  pass "EZVM release packager produces verified split raw assets and installer"
+  ! grep -Fq "image_sha='" "$fixture/release/install-Omarchy-riftvm.command" ||
+    fail "RiftVM installer still embeds a second copy of manifest checksums"
+  pass "RiftVM release packager produces verified split raw assets and installer"
 )
 
 if command -v shellcheck >/dev/null 2>&1; then
@@ -183,7 +183,7 @@ fi
 
   select_profile --profile aarch64-virt
   [[ $PROFILE_DIR == "$ROOT/profiles/aarch64-virt" ]] || fail "profile directory was not selected"
-  [[ $OUTPUT_PATH == "$ROOT/build/omarchy-aarch64-ezvm.raw" ]] ||
+  [[ $OUTPUT_PATH == "$ROOT/build/omarchy-aarch64-riftvm.raw" ]] ||
     fail "profile default output is incorrect: $OUTPUT_PATH"
   validate_remove_package_patterns
 
@@ -387,15 +387,15 @@ grep -Fq 'LIMINE_FORCE_UEFI=yes limine-update' "$ROOT/bin/build-image" ||
   fail "image assembly does not build the AArch64 UKI inside its offline chroot"
 grep -Fq 'boot/EFI/Linux/omarchy_linux.efi' "$ROOT/bin/build-image" ||
   fail "image validation does not require the stable Omarchy UKI"
-grep -Fq 'omarchy-ezvm-ensure-bootable' "$ROOT/bin/build-image" ||
+grep -Fq 'omarchy-riftvm-ensure-bootable' "$ROOT/bin/build-image" ||
   fail "image assembly does not install a direct Omarchy UKI fallback"
 grep -Fq 'EFI/BOOT/BOOTAA64.EFI' "$ROOT/bin/build-image" ||
   fail "image validation does not require the standard AArch64 EFI fallback"
 grep -Fq 'Target = limine' \
-  "$ROOT/profiles/aarch64-virt/overlay/usr/share/libalpm/hooks/zzzz-omarchy-ezvm-boot-fallback.hook" ||
-  fail "system updates do not refresh the EZVM EFI fallback"
+  "$ROOT/profiles/aarch64-virt/overlay/usr/share/libalpm/hooks/zzzz-omarchy-riftvm-boot-fallback.hook" ||
+  fail "system updates do not refresh the RiftVM EFI fallback"
 grep -Fq 'EFI/Linux/omarchy_linux.efi' \
-  "$ROOT/profiles/aarch64-virt/overlay/usr/local/sbin/omarchy-ezvm-ensure-bootable" ||
+  "$ROOT/profiles/aarch64-virt/overlay/usr/local/sbin/omarchy-riftvm-ensure-bootable" ||
   fail "the fallback repair helper does not source the Omarchy UKI"
 grep -Fq "grep -Eq '^==> ERROR:|^ERROR:'" "$ROOT/bin/build-image" ||
   fail "native AArch64 image assembly accepts UKI build errors"
@@ -441,13 +441,13 @@ grep -Fq 'resolve_profile_removed_packages' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce profile package removals"
 for removed in qemu-guest-agent vulkan-virtio; do
   ! grep -qx "$removed" "$ROOT/profiles/aarch64-virt/runtime-packages" ||
-    fail "EZVM-only profile still installs $removed"
+    fail "RiftVM-only profile still installs $removed"
 done
 grep -qx 'spice-vdagent' "$ROOT/profiles/aarch64-virt/runtime-packages" ||
-  fail "EZVM profile does not install the SPICE desktop agent"
+  fail "RiftVM profile does not install the SPICE desktop agent"
 grep -qx 'omarchy-spice-guest-tools' "$ROOT/config/omarchy-packages.aarch64" ||
-  fail "EZVM profile does not install Omarchy's SPICE session integration"
-[[ ! -e $ROOT/utm ]] || fail "EZVM-only repository still contains a UTM template"
+  fail "RiftVM profile does not install Omarchy's SPICE session integration"
+[[ ! -e $ROOT/utm ]] || fail "RiftVM-only repository still contains a UTM template"
 [[ ! -e $ROOT/bin/package-utm-release ]] || fail "UTM release packager still exists"
 [[ ! -e $ROOT/bin/run-image ]] || fail "QEMU image runner still exists"
 if grep -R -E -i 'package-utm|\.qcow2|hostshare|[[:space:]]9p[[:space:]]' \
@@ -455,9 +455,9 @@ if grep -R -E -i 'package-utm|\.qcow2|hostshare|[[:space:]]9p[[:space:]]' \
   find "$ROOT/profiles" -type f ! -name remove-package-patterns -exec \
     grep -E -i 'package-utm|\.qcow2|hostshare|[[:space:]]9p[[:space:]]' {} + \
     >/dev/null; then
-  fail "EZVM-only runtime or release pipeline still contains UTM/QCOW2/SPICE/9p support"
+  fail "RiftVM-only runtime or release pipeline still contains UTM/QCOW2/SPICE/9p support"
 fi
-pass "EZVM profile retains SPICE clipboard support while excluding QEMU, UTM, and 9p integration"
+pass "RiftVM profile retains SPICE clipboard support while excluding QEMU, UTM, and 9p integration"
 grep -Fq -- '--continue-at -' "$ROOT/bin/build-image" ||
   fail "rolling image downloads cannot resume after interruption"
 grep -Fq 'partial="$2.part"' "$ROOT/bin/build-image" ||
@@ -470,19 +470,19 @@ grep -Fq 'reclaim_packaging_space' "$ROOT/bin/build-image" &&
   fail "CI cannot reclaim transient package caches before sparse raw packaging"
 grep -Fq 'runs-on: ubuntu-24.04-arm' "$ROOT/.github/workflows/release-image.yml" ||
   fail "image Releases are not built on the native Ubuntu 24.04 ARM runner"
-grep -Fq 'omarchy-aarch64-ezvm.raw.sha256' "$ROOT/.github/workflows/release-image.yml" &&
-  grep -Fq 'package-ezvm-release' "$ROOT/.github/workflows/release-image.yml" ||
-  fail "the release workflow does not build and package the EZVM raw image"
+grep -Fq 'omarchy-aarch64-riftvm.raw.sha256' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'package-riftvm-release' "$ROOT/.github/workflows/release-image.yml" ||
+  fail "the release workflow does not build and package the RiftVM raw image"
 if grep -Fq 'actions/upload-artifact' "$ROOT/.github/workflows/release-image.yml"; then
   fail "the multi-gigabyte image is copied through Actions artifact storage"
 fi
 grep -Fq 'uses: actions/cache/save@v6' "$ROOT/.github/workflows/release-image.yml" ||
   fail "verified rolling inputs are only cached after the entire Release succeeds"
 grep -Fq -- '--notes-file RELEASE_NOTES.md' "$ROOT/.github/workflows/release-image.yml" &&
-  grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/RELEASE_NOTES.md" &&
-  grep -Fq 'releases/latest/download/install-Omarchy-ezvm.command' "$ROOT/README.md" ||
+  grep -Fq 'releases/latest/download/install-Omarchy-riftvm.command' "$ROOT/RELEASE_NOTES.md" &&
+  grep -Fq 'releases/latest/download/install-Omarchy-riftvm.command' "$ROOT/README.md" ||
   fail "GitHub Releases do not expose the one-command latest installer"
-pass "native GitHub image publishing emits only the verified EZVM image path"
+pass "native GitHub image publishing emits only the verified RiftVM image path"
 grep -Fq "if: github.event_name == 'push' || inputs.publish_release" \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "manual image validation can accidentally publish a draft as latest"
@@ -529,38 +529,38 @@ grep -Fq 'mount -o remount,bind,ro "$MOUNT_DIR/run/omarchy-aarch64-repository"' 
 grep -Fq 'root_owned_paths=(' "$ROOT/bin/build-image" ||
   fail "image validation does not enforce trusted rootfs directory ownership"
 grep -Fq 'virtiofs?' "$ROOT/bin/build-image" ||
-  fail "image build does not keep virtiofs available for the EZVM enrollment share"
+  fail "image build does not keep virtiofs available for the RiftVM enrollment share"
 grep -Fq 'uinput?' "$ROOT/bin/build-image" ||
   fail "image build does not keep uinput available for early guest input"
 grep -Fq 'install -d -m755 "$MOUNT_DIR/usr/local/libexec"' "$ROOT/bin/build-image" ||
   fail "image build does not create the local libexec directory before preserving Omarchy's monitor watcher"
 
-display_watch="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-watch"
-display_setup="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-ezvm-display-setup"
+display_watch="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-riftvm-display-watch"
+display_setup="$ROOT/profiles/aarch64-virt/overlay/usr/local/libexec/omarchy-riftvm-display-setup"
 monitor_wrapper="$ROOT/profiles/aarch64-virt/overlay/usr/local/bin/omarchy-hyprland-monitor-watch"
 session_monitor_wrapper="$ROOT/profiles/aarch64-virt/overlay/usr/bin/omarchy-hyprland-monitor-watch"
-display_watch_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-ezvm-display-watch.service"
-display_setup_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-ezvm-display-setup.service"
-display_watch_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-display-bridge.service.d/90-ezvm-virtio-display.conf"
-display_setup_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-guest-tools-bootstrap.service.d/90-ezvm-display-owner.conf"
+display_watch_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-riftvm-display-watch.service"
+display_setup_unit="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/omarchy-riftvm-display-setup.service"
+display_watch_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-display-bridge.service.d/90-riftvm-virtio-display.conf"
+display_setup_dropin="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/spice-guest-tools-bootstrap.service.d/90-riftvm-display-owner.conf"
 spice_config="$ROOT/profiles/aarch64-virt/overlay/usr/share/spice-guest-tools/config/config.toml"
 sddm_hyprland="$ROOT/profiles/aarch64-virt/overlay/usr/share/sddm/hyprland.lua"
 [[ -x $display_watch && -x $display_setup && -x $monitor_wrapper && -x $session_monitor_wrapper ]] ||
-  fail "EZVM Hyprland display integration is not executable"
-grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-watch' "$display_watch_unit" ||
-  fail "EZVM does not ship an independent virtio-gpu display watcher unit"
-grep -Fq 'Requires=omarchy-ezvm-display-setup.service' "$display_watch_unit" ||
-  fail "EZVM display watcher does not require display ownership setup"
+  fail "RiftVM Hyprland display integration is not executable"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-riftvm-display-watch' "$display_watch_unit" ||
+  fail "RiftVM does not ship an independent virtio-gpu display watcher unit"
+grep -Fq 'Requires=omarchy-riftvm-display-setup.service' "$display_watch_unit" ||
+  fail "RiftVM display watcher does not require display ownership setup"
 ! grep -Eq 'Condition(PathExists|Environment)=' "$display_watch_unit" ||
-  fail "EZVM display watcher must not inherit SPICE or imported-environment conditions"
-grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-setup' "$display_setup_unit" ||
-  fail "EZVM does not ship an independent display ownership setup unit"
-grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-watch' "$display_watch_dropin" ||
-  fail "EZVM does not replace the enabled SPICE display bridge with its virtio-gpu watcher"
-grep -Fq 'ExecStart=/usr/local/libexec/omarchy-ezvm-display-setup' "$display_setup_dropin" ||
-  fail "EZVM does not replace SPICE bootstrap with its display ownership migration"
+  fail "RiftVM display watcher must not inherit SPICE or imported-environment conditions"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-riftvm-display-setup' "$display_setup_unit" ||
+  fail "RiftVM does not ship an independent display ownership setup unit"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-riftvm-display-watch' "$display_watch_dropin" ||
+  fail "RiftVM does not replace the enabled SPICE display bridge with its virtio-gpu watcher"
+grep -Fq 'ExecStart=/usr/local/libexec/omarchy-riftvm-display-setup' "$display_setup_dropin" ||
+  fail "RiftVM does not replace SPICE bootstrap with its display ownership migration"
 grep -Fq 'remove_spice_monitor_ownership' "$display_setup" ||
-  fail "EZVM display migration does not remove stale SPICE monitor ownership"
+  fail "RiftVM display migration does not remove stale SPICE monitor ownership"
 awk '
   /^\[display\]$/ { section = "display"; next }
   /^\[clipboard\]$/ { section = "clipboard"; next }
@@ -568,25 +568,25 @@ awk '
   section == "display" && $0 == "enabled = false" { display_disabled = 1 }
   section == "clipboard" && $0 == "enabled = true" { clipboard_enabled = 1 }
   END { exit !(display_disabled && clipboard_enabled) }
-' "$spice_config" || fail "EZVM must disable SPICE display while preserving clipboard"
+' "$spice_config" || fail "RiftVM must disable SPICE display while preserving clipboard"
 grep -Fq 'virtio_gpu' "$display_watch" ||
-  fail "EZVM display watcher is not restricted to virtio-gpu"
+  fail "RiftVM display watcher is not restricted to virtio-gpu"
 grep -Fq '"$DRM_ROOT"/card*-*' "$display_watch" ||
-  fail "EZVM display watcher does not observe DRM mode changes"
+  fail "RiftVM display watcher does not observe DRM mode changes"
 grep -Fq 'hl.monitor({' "$display_watch" ||
-  fail "EZVM display watcher does not reconcile Hyprland with the DRM preferred mode"
+  fail "RiftVM display watcher does not reconcile Hyprland with the DRM preferred mode"
 ! grep -Fq '"$HYPRCTL" reload' "$display_watch" ||
-  fail "EZVM display watcher must not race exact mode reconciliation with repeated Hyprland reloads"
+  fail "RiftVM display watcher must not race exact mode reconciliation with repeated Hyprland reloads"
 grep -Fq '/usr/local/libexec/omarchy-hyprland-monitor-watch-upstream' "$session_monitor_wrapper" ||
-  fail "EZVM session monitor wrapper does not retain Omarchy monitor recovery"
-grep -Fq '/usr/local/libexec/omarchy-ezvm-display-setup' "$session_monitor_wrapper" ||
-  fail "EZVM monitor wrapper does not migrate existing SPICE display ownership"
+  fail "RiftVM session monitor wrapper does not retain Omarchy monitor recovery"
+grep -Fq '/usr/local/libexec/omarchy-riftvm-display-setup' "$session_monitor_wrapper" ||
+  fail "RiftVM monitor wrapper does not migrate existing SPICE display ownership"
 grep -Fq '/usr/bin/omarchy-hyprland-monitor-watch' "$monitor_wrapper" ||
-  fail "EZVM compatibility monitor wrapper does not delegate to the session entry point"
-grep -Fq '/usr/local/libexec/omarchy-ezvm-display-watch' "$sddm_hyprland" ||
-  fail "EZVM SDDM greeter does not start dynamic virtio-gpu display reconciliation"
+  fail "RiftVM compatibility monitor wrapper does not delegate to the session entry point"
+grep -Fq '/usr/local/libexec/omarchy-riftvm-display-watch' "$sddm_hyprland" ||
+  fail "RiftVM SDDM greeter does not start dynamic virtio-gpu display reconciliation"
 grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
-  fail "EZVM SDDM greeter does not select the host-provided preferred mode"
+  fail "RiftVM SDDM greeter does not select the host-provided preferred mode"
 
 (
   fixture=$(mktemp -d)
@@ -596,14 +596,14 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
   ln -s "$fixture/drivers/virtio_gpu" "$fixture/drm/card0/device/driver"
   printf 'connected\n' >"$fixture/drm/card0-Virtual-1/status"
   printf '1920x1080\n' >"$fixture/drm/card0-Virtual-1/modes"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"$OMARCHY_EZVM_HYPRCTL_LOG"\n' >"$fixture/hyprctl"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"$OMARCHY_RIFTVM_HYPRCTL_LOG"\n' >"$fixture/hyprctl"
   chmod 755 "$fixture/hyprctl"
 
-  OMARCHY_EZVM_DRM_ROOT="$fixture/drm" \
-    OMARCHY_EZVM_HYPRCTL="$fixture/hyprctl" \
-    OMARCHY_EZVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
-    OMARCHY_EZVM_LOG="$fixture/display-watch.log" \
-    OMARCHY_EZVM_POLL_INTERVAL=0.05 \
+  OMARCHY_RIFTVM_DRM_ROOT="$fixture/drm" \
+    OMARCHY_RIFTVM_HYPRCTL="$fixture/hyprctl" \
+    OMARCHY_RIFTVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
+    OMARCHY_RIFTVM_LOG="$fixture/display-watch.log" \
+    OMARCHY_RIFTVM_POLL_INTERVAL=0.05 \
     XDG_RUNTIME_DIR="$fixture" \
     "$display_watch" &
   watcher_pid=$!
@@ -616,12 +616,12 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
     fi
     sleep 0.05
   done
-  [[ -s $fixture/hyprctl.log ]] || fail "EZVM display watcher did not react to a mode-list change"
+  [[ -s $fixture/hyprctl.log ]] || fail "RiftVM display watcher did not react to a mode-list change"
   grep -Fxq 'eval hl.monitor({ output = "Virtual-1", mode = "2560x1440", position = "auto", scale = "auto" })' "$fixture/hyprctl.log" ||
     { sed -n '1,120p' "$fixture/hyprctl.log" >&2
-      fail "EZVM display watcher did not apply the new DRM preferred mode to Hyprland"; }
+      fail "RiftVM display watcher did not apply the new DRM preferred mode to Hyprland"; }
   ! grep -Fxq reload "$fixture/hyprctl.log" ||
-    fail "EZVM display watcher raced exact mode reconciliation with a Hyprland reload"
+    fail "RiftVM display watcher raced exact mode reconciliation with a Hyprland reload"
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
   watcher_pid=
@@ -635,11 +635,11 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
   ln -s "$fixture/drivers/virtio-pci" "$fixture/drm/card0/device/driver"
   ln -s "$fixture/modules/virtio_gpu" "$fixture/drivers/virtio-pci/module"
   : >"$fixture/hyprctl.log"
-  OMARCHY_EZVM_DRM_ROOT="$fixture/drm" \
-    OMARCHY_EZVM_HYPRCTL="$fixture/hyprctl" \
-    OMARCHY_EZVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
-    OMARCHY_EZVM_LOG="$fixture/display-watch.log" \
-    OMARCHY_EZVM_POLL_INTERVAL=0.05 \
+  OMARCHY_RIFTVM_DRM_ROOT="$fixture/drm" \
+    OMARCHY_RIFTVM_HYPRCTL="$fixture/hyprctl" \
+    OMARCHY_RIFTVM_HYPRCTL_LOG="$fixture/hyprctl.log" \
+    OMARCHY_RIFTVM_LOG="$fixture/display-watch.log" \
+    OMARCHY_RIFTVM_POLL_INTERVAL=0.05 \
     XDG_RUNTIME_DIR="$fixture" \
     "$display_watch" &
   watcher_pid=$!
@@ -648,12 +648,12 @@ grep -Fq 'mode = "preferred"' "$sddm_hyprland" ||
     sleep 0.05
   done
   [[ -s $fixture/hyprctl.log ]] ||
-    fail "EZVM display watcher rejected a virtio-pci device backed by virtio_gpu"
+    fail "RiftVM display watcher rejected a virtio-pci device backed by virtio_gpu"
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
   watcher_pid=
 )
-pass "EZVM display watcher reacts to virtio-gpu mode changes"
+pass "RiftVM display watcher reacts to virtio-gpu mode changes"
 
 (
   fixture=$(mktemp -d)
@@ -683,56 +683,56 @@ EOF
     XDG_CONFIG_HOME="$fixture/home/.config" \
     XDG_STATE_HOME="$fixture/home/.local/state" \
     PATH="$fixture/bin:$PATH" \
-    OMARCHY_EZVM_SPICE_DEFAULT_CONFIG="$spice_config" \
+    OMARCHY_RIFTVM_SPICE_DEFAULT_CONFIG="$spice_config" \
     "$display_setup"
   ! grep -Fq 'spice-guest-tools managed mode' "$fixture/home/.config/hypr/monitors.lua" ||
-    fail "EZVM display migration left SPICE monitor ownership behind"
+    fail "RiftVM display migration left SPICE monitor ownership behind"
   grep -Fq 'mode = "preferred"' "$fixture/home/.config/hypr/monitors.lua" ||
-    fail "EZVM display migration damaged the Omarchy preferred monitor rule"
+    fail "RiftVM display migration damaged the Omarchy preferred monitor rule"
   awk '
     /^\[display\]$/ { section = "display"; next }
     /^\[/ { section = "" }
     section == "display" && $0 == "enabled = false" { found = 1 }
     END { exit !found }
   ' "$fixture/home/.config/spice-guest-tools/config.toml" ||
-    fail "EZVM display migration did not disable the SPICE display bridge"
+    fail "RiftVM display migration did not disable the SPICE display bridge"
   [[ ! -e $fixture/home/.local/state/spice-guest-tools/display.state ]] ||
-    fail "EZVM display migration retained a stale SPICE modeline"
+    fail "RiftVM display migration retained a stale SPICE modeline"
 )
-pass "EZVM display migration preserves clipboard while removing SPICE mode ownership"
-grep -Fq -- '--ezvm-guest-agent' "$ROOT/bin/build-image" ||
-  fail "image build does not require the pinned EZVM guest agent"
-grep -Fq -- '--ezvm-guest-agent build/dependencies/ezvm-agent/ezvm-agent' \
+pass "RiftVM display migration preserves clipboard while removing SPICE mode ownership"
+grep -Fq -- '--riftvm-guest-agent' "$ROOT/bin/build-image" ||
+  fail "image build does not require the pinned RiftVM guest agent"
+grep -Fq -- '--riftvm-guest-agent build/dependencies/rift-agent/rift-agent' \
   "$ROOT/.github/workflows/release-image.yml" ||
-  fail "release workflow does not bake the pinned EZVM guest agent"
-grep -Fq -- '-X main.version=${{ steps.sources.outputs.ezvm_agent_ref }}' \
+  fail "release workflow does not bake the pinned RiftVM guest agent"
+grep -Fq -- '-X main.version=${{ steps.sources.outputs.riftvm_agent_ref }}' \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "release workflow does not embed the pinned guest-agent revision as its runtime version"
-grep -Fq 'ReadWritePaths=/run /mnt/ezvm-shared' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
-  fail "guest agent service cannot write the EZVM shared folder"
+grep -Fq 'ReadWritePaths=/run /mnt/riftvm-shared' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/rift-agent.service" ||
+  fail "guest agent service cannot write the RiftVM shared folder"
 source "$ROOT/sources.env"
-[[ $EZVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
-  fail "EZVM guest agent source is not pinned to a full commit"
-for field in ezvm_guest_agent_source_url ezvm_guest_agent_source_ref ezvm_guest_agent_sha256; do
+[[ $RIFTVM_GUEST_AGENT_REF =~ ^[0-9a-f]{40}$ ]] ||
+  fail "RiftVM guest agent source is not pinned to a full commit"
+for field in riftvm_guest_agent_source_url riftvm_guest_agent_source_ref riftvm_guest_agent_sha256; do
   grep -Fq "printf '$field=%s\\n'" "$ROOT/bin/build-image" ||
     fail "image provenance does not record $field"
 done
-grep -Fq 'What=ezvm-agent' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-ezvm\\x2dagent\\x2dconfig.mount" ||
-  fail "image does not mount the host-provided EZVM enrollment share"
+grep -Fq 'What=rift-agent' \
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/run-rift\\x2dagent\\x2dconfig.mount" ||
+  fail "image does not mount the host-provided RiftVM enrollment share"
 grep -Fq 'Before=omarchy-provision-owner.service' \
-  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/ezvm-agent.service" ||
-  fail "EZVM guest agent is not ordered before first-user provisioning"
-shared_mount="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/mnt-ezvm\x2dshared.mount"
-session_agent="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/ezvm-session-agent.service"
-grep -Fxq 'What=ezvm_shared' "$shared_mount" ||
-  fail "EZVM Omarchy shared mount uses the wrong VirtioFS tag"
-grep -Fxq 'Where=/mnt/ezvm-shared' "$shared_mount" ||
-  fail "EZVM Omarchy shared mount uses the wrong guest path"
+  "$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/rift-agent.service" ||
+  fail "RiftVM guest agent is not ordered before first-user provisioning"
+shared_mount="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/system/mnt-riftvm\x2dshared.mount"
+session_agent="$ROOT/profiles/aarch64-virt/overlay/etc/systemd/user/rift-session-agent.service"
+grep -Fxq 'What=riftvm_shared' "$shared_mount" ||
+  fail "RiftVM Omarchy shared mount uses the wrong VirtioFS tag"
+grep -Fxq 'Where=/mnt/riftvm-shared' "$shared_mount" ||
+  fail "RiftVM Omarchy shared mount uses the wrong guest path"
 grep -Fxq 'Options=rw,nosuid,nodev' "$shared_mount" ||
-  fail "EZVM Omarchy shared mount lacks its security options"
-grep -Fxq 'ExecStart=/usr/local/sbin/ezvm-agent --session' "$session_agent" ||
+  fail "RiftVM Omarchy shared mount lacks its security options"
+grep -Fxq 'ExecStart=/usr/local/sbin/rift-agent --session' "$session_agent" ||
   fail "desktop integration does not run the unprivileged Session Agent mode"
 grep -Fxq 'NoNewPrivileges=true' "$session_agent" ||
   fail "Session Agent can gain privileges"
@@ -741,20 +741,20 @@ grep -Fxq 'ProtectSystem=strict' "$session_agent" ||
 grep -Eq '^[[:space:]]*wl-clipboard([[:space:]]*(#.*)?)?$' \
   "$ROOT/profiles/aarch64-virt/runtime-packages" ||
   fail "Session Agent clipboard dependency is not explicit"
-grep -Fq "target_chroot systemctl enable 'mnt-ezvm\\x2dshared.mount'" "$ROOT/bin/build-image" ||
+grep -Fq "target_chroot systemctl enable 'mnt-riftvm\\x2dshared.mount'" "$ROOT/bin/build-image" ||
   fail "shared mount is not enabled in the factory image"
-grep -Fq 'install -d -m755 "$MOUNT_DIR/mnt/ezvm-shared"' "$ROOT/bin/build-image" ||
+grep -Fq 'install -d -m755 "$MOUNT_DIR/mnt/riftvm-shared"' "$ROOT/bin/build-image" ||
   fail "shared mount point is not created in the factory image"
-grep -Fq 'target_chroot systemctl --global enable ezvm-session-agent.service' "$ROOT/bin/build-image" ||
+grep -Fq 'target_chroot systemctl --global enable rift-session-agent.service' "$ROOT/bin/build-image" ||
   fail "Session Agent is not globally enabled for the owner session"
 for required in \
-  'etc/systemd/system/multi-user.target.wants/mnt-ezvm\x2dshared.mount' \
-  mnt/ezvm-shared \
-  etc/systemd/user/graphical-session.target.wants/ezvm-session-agent.service; do
+  'etc/systemd/system/multi-user.target.wants/mnt-riftvm\x2dshared.mount' \
+  mnt/riftvm-shared \
+  etc/systemd/user/graphical-session.target.wants/rift-session-agent.service; do
   grep -Fq "$required" "$ROOT/bin/build-image" ||
     fail "target validation does not require $required"
 done
-pass "EZVM Omarchy shared folder and Session Agent are hardened and enabled"
+pass "RiftVM Omarchy shared folder and Session Agent are hardened and enabled"
 grep -Fq 'systemctl mask systemd-oomd.service systemd-oomd.socket' \
   "$ROOT/bin/build-image" ||
   fail "VZ image does not mask the systemd-oomd SIGILL activation paths"
@@ -762,17 +762,17 @@ apply_system_line=$(grep -n '^  apply_omarchy_system$' "$ROOT/bin/build-image" |
 mask_services_line=$(grep -n '^  mask_incompatible_target_services$' "$ROOT/bin/build-image" | cut -d: -f1)
 [[ -n $apply_system_line && -n $mask_services_line && $mask_services_line -gt $apply_system_line ]] ||
   fail "incompatible services are masked before Omarchy finishes enabling services"
-ezvm_input_rules="$ROOT/profiles/aarch64-virt/overlay/etc/udev/rules.d/70-ezvm-input.rules"
-grep -Fq 'ATTRS{name}=="EZVM Keyboard"' "$ezvm_input_rules" ||
-  fail "EZVM keyboard is not classified for the graphical seat"
-grep -Fq 'ENV{ID_INPUT_KEYBOARD}="1"' "$ezvm_input_rules" ||
-  fail "EZVM keyboard does not advertise its libinput class"
-grep -Fq 'ATTRS{name}=="EZVM Relative Pointer"' "$ezvm_input_rules" ||
-  fail "EZVM relative pointer is not classified for the graphical seat"
-grep -Fq 'ATTRS{name}=="EZVM Absolute Pointer"' "$ezvm_input_rules" ||
-  fail "EZVM absolute pointer is not classified for the graphical seat"
-grep -Fq 'etc/udev/rules.d/70-ezvm-input.rules' "$ROOT/bin/build-image" ||
-  fail "target validation does not require the EZVM input rules"
+riftvm_input_rules="$ROOT/profiles/aarch64-virt/overlay/etc/udev/rules.d/70-riftvm-input.rules"
+grep -Fq 'ATTRS{name}=="RiftVM Keyboard"' "$riftvm_input_rules" ||
+  fail "RiftVM keyboard is not classified for the graphical seat"
+grep -Fq 'ENV{ID_INPUT_KEYBOARD}="1"' "$riftvm_input_rules" ||
+  fail "RiftVM keyboard does not advertise its libinput class"
+grep -Fq 'ATTRS{name}=="RiftVM Relative Pointer"' "$riftvm_input_rules" ||
+  fail "RiftVM relative pointer is not classified for the graphical seat"
+grep -Fq 'ATTRS{name}=="RiftVM Absolute Pointer"' "$riftvm_input_rules" ||
+  fail "RiftVM absolute pointer is not classified for the graphical seat"
+grep -Fq 'etc/udev/rules.d/70-riftvm-input.rules' "$ROOT/bin/build-image" ||
+  fail "target validation does not require the RiftVM input rules"
 grep -Fq "zone1970.tab | sort -u" "$ROOT/bin/build-image" ||
   fail "first-boot timezone selection still depends on the early system bus"
 grep -Fq "expected two timedatectl timezone picker inputs" "$ROOT/bin/build-image" ||
