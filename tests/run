@@ -487,6 +487,17 @@ grep -Fq "if: github.event_name == 'push' || inputs.publish_release" \
   "$ROOT/.github/workflows/release-image.yml" ||
   fail "manual image validation can accidentally publish a draft as latest"
 pass "manual image validation remains a draft unless publication is explicit"
+grep -Fq "cron: '17 8 * * 1'" "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'EVENT_NAME" == "schedule"' "$ROOT/.github/workflows/release-image.yml" &&
+  grep -Fq 'riftvm.${build_date}.${GITHUB_RUN_NUMBER}' "$ROOT/.github/workflows/release-image.yml" ||
+  fail "weekly Factory candidates are not built with unique immutable draft tags"
+grep -Fq 'repos/basecamp/omarchy/releases/latest' \
+  "$ROOT/.github/workflows/check-omarchy-upstream.yml" &&
+  grep -Fq 'issues: write' "$ROOT/.github/workflows/check-omarchy-upstream.yml" &&
+  grep -Fq 'pass clean-workspace, input, display, sharing, update and rollback acceptance' \
+    "$ROOT/.github/workflows/check-omarchy-upstream.yml" ||
+  fail "official Omarchy releases are not tracked through the gated AArch64 port workflow"
+pass "scheduled Factory candidates and official-version tracking remain gated"
 grep -Fq 'pacman failed after 8 attempts' "$ROOT/bin/build-image" ||
   fail "target package installation does not tolerate transient mirror failures"
 grep -Fq -- '--dearmor --output "$partial" "$ROOTFS_KEYRING"' "$ROOT/bin/build-image" ||

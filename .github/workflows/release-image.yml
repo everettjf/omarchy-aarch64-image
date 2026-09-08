@@ -1,6 +1,11 @@
 name: Publish AArch64 RiftVM image
 
 on:
+  schedule:
+    # Rebuild the pinned stable Omarchy source against the newest verified
+    # Arch Linux ARM and package-repository inputs. Scheduled builds remain
+    # drafts until the real-guest acceptance gate promotes them.
+    - cron: '17 8 * * 1'
   push:
     tags:
       - 'v*'
@@ -171,6 +176,10 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             tag=$REQUESTED_TAG
+          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+            source ./sources.env
+            build_date=$(date -u +%Y%m%d)
+            tag="v${OMARCHY_AARCH64_VERSION}-riftvm.${build_date}.${GITHUB_RUN_NUMBER}"
           else
             tag=$REF_NAME
           fi
